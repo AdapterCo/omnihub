@@ -1,4 +1,7 @@
 ﻿import { z } from 'zod';
+import { RuleError } from './errors.ts';
+import type { PermissionCode } from './authz/permissions.ts';
+export { RuleError } from './errors.ts';
 export const money = (cents:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(cents/100);
 export const date = (value:number)=>new Date(value).toLocaleString('pt-BR',{timeZone:'America/Sao_Paulo',dateStyle:'short',timeStyle:'short'});
 export type StoreRecord={id:string;name:string;legalName:string;cnpj:string;ie:string;regime:string;uf:string;city:string;municipalityCode:string;address:string;number:string;district:string;zip:string};
@@ -8,7 +11,7 @@ export type Sale={id:string;storeId:string;storeName:string;storeCnpj:string;cas
 export type Transfer={id:string;from:string;to:string;productId:string;productName:string;qty:number;status:'transit'|'received';createdAt:number;receivedAt?:number;operator:string};
 export type Audit={id:string;at:number;userId:string;operator:string;action:string;description:string;storeId?:string};
 export type State={stores:StoreRecord[];products:Product[];stock:Record<string,Record<string,number>>;cash:Cash[];sales:Sale[];transfers:Transfer[];audit:Audit[];requests:Record<string,{fingerprint:string;resultId?:string}>};
-export type Actor={userId:string;displayName:string;role:string;storeId:string|null};
+export type Actor={userId:string;displayName:string;role:string;storeId:string|null;permissions:ReadonlySet<PermissionCode>};
 export type Entitlement={status:string;accessUntil:number;maxStores:number};
 export type Snapshot={account:{name:string;subscription:Entitlement};actor:Actor;state:State;revision:number};
 export function emptyState():State{return {stores:[],products:[],stock:{},cash:[],sales:[],transfers:[],audit:[],requests:{}}}
@@ -26,7 +29,6 @@ export const commandSchema=z.discriminatedUnion('type',[
  z.object({type:z.literal('sale.print'),id:identifier}),
 ]);
 export type Command=z.infer<typeof commandSchema>;
-export class RuleError extends Error{status:number;constructor(message:string,status=400){super(message);this.status=status}}
 export function requireActive(plan:Entitlement,now:number){if(!['active','trial'].includes(plan.status)||plan.accessUntil<=now)throw new RuleError('Seu período de acesso terminou. Novas operações estão bloqueadas.',402)}
 export function execute(state:State,actor:Actor,plan:Entitlement,raw:unknown,key:string,now=Date.now()):{state:State;resultId?:string;replayed:boolean}{
  const parsed=commandSchema.safeParse(raw);if(!parsed.success)throw new RuleError('Confira os campos: '+parsed.error.issues.map(x=>x.message).join('; ')); const c=parsed.data;
@@ -34,21 +36,21 @@ export function execute(state:State,actor:Actor,plan:Entitlement,raw:unknown,key
  if(previous){if(previous.fingerprint!==fingerprint)throw new RuleError('Identificador de operação já utilizado.',409);return {state,resultId:previous.resultId,replayed:true}}
  if(c.type!=='sale.print'&&c.type!=='cash.close'&&c.type!=='transfer.receive')requireActive(plan,now);
  const next=structuredClone(state);let resultId:string|undefined;let description='';let auditStore:string|undefined;
- const admin=()=>{if(actor.role!=='admin')throw new RuleError('Somente o administrador pode realizar esta operação.',403)};
+ const requirePermission=(code:PermissionCode)=>{if(!actor.permissions.has(code))throw new RuleError('Você não tem permissão para realizar esta operação.',403)};
  const store=(id:string,write=true)=>{const s=next.stores.find(s=>s.id===id);if(!s)throw new RuleError('Loja não encontrada.',404);if(write&&actor.role!=='admin'&&actor.storeId!==id)throw new RuleError('Você não pode movimentar outra loja.',403);return s};
  const product=(id:string)=>{const p=next.products.find(p=>p.id===id);if(!p)throw new RuleError('Produto não encontrado.',404);return p};
  const stock=(s:string,p:string)=>next.stock[s]?.[p]??0;
  const move=(s:string,p:string,delta:number)=>{const balance=stock(s,p)+delta;if(balance<0)throw new RuleError('Estoque insuficiente para esta operação.',409);next.stock[s]??={};next.stock[s][p]=balance};
  if(c.type==='store.create'||c.type==='store.update'){
-  admin();if(c.type==='store.create'){if(next.stores.length>=plan.maxStores)throw new RuleError('Limite de lojas do plano atingido.',403);resultId=crypto.randomUUID();next.stores.push({id:resultId,...c.data});next.stock[resultId]={}}else{store(c.id);next.stores=next.stores.map(s=>s.id===c.id?{id:c.id,...c.data}:s);resultId=c.id}description=`Loja: ${c.data.name}`;auditStore=resultId;
+  requirePermission(c.type==='store.create'?'STORE_CREATE':'STORE_EDIT');if(c.type==='store.create'){if(next.stores.length>=plan.maxStores)throw new RuleError('Limite de lojas do plano atingido.',403);resultId=crypto.randomUUID();next.stores.push({id:resultId,...c.data});next.stock[resultId]={}}else{store(c.id);next.stores=next.stores.map(s=>s.id===c.id?{id:c.id,...c.data}:s);resultId=c.id}description=`Loja: ${c.data.name}`;auditStore=resultId;
  }else if(c.type==='product.create'||c.type==='product.update'){
-  admin();const id=c.type==='product.update'?c.id:crypto.randomUUID();if(c.type==='product.update')product(id);if(next.products.some(p=>p.sku===c.data.sku&&p.id!==id))throw new RuleError('Já existe um produto com este SKU.',409);if(c.type==='product.create')next.products.push({id,...c.data});else next.products=next.products.map(p=>p.id===id?{id,...c.data}:p);resultId=id;description=`Produto: ${c.data.name}`;
+  requirePermission(c.type==='product.create'?'PRODUCT_CREATE':'PRODUCT_EDIT');const id=c.type==='product.update'?c.id:crypto.randomUUID();if(c.type==='product.update')product(id);if(next.products.some(p=>p.sku===c.data.sku&&p.id!==id))throw new RuleError('Já existe um produto com este SKU.',409);if(c.type==='product.create')next.products.push({id,...c.data});else next.products=next.products.map(p=>p.id===id?{id,...c.data}:p);resultId=id;description=`Produto: ${c.data.name}`;
  }else if(c.type==='stock.receive'){
-  admin();const s=store(c.storeId),p=product(c.productId);move(s.id,p.id,c.qty);description=`Entrada de ${c.qty} × ${p.name} em ${s.name}: ${c.reason}`;auditStore=s.id;
+  requirePermission('STOCK_ADJUST');const s=store(c.storeId),p=product(c.productId);move(s.id,p.id,c.qty);description=`Entrada de ${c.qty} × ${p.name} em ${s.name}: ${c.reason}`;auditStore=s.id;
  }else if(c.type==='transfer.create'){
-  admin();const from=store(c.from),to=store(c.to),p=product(c.productId);if(from.id===to.id)throw new RuleError('Escolha lojas diferentes.');move(from.id,p.id,-c.qty);resultId=crypto.randomUUID();next.transfers.unshift({id:resultId,from:from.id,to:to.id,productId:p.id,productName:p.name,qty:c.qty,status:'transit',createdAt:now,operator:actor.displayName});description=`${c.qty} × ${p.name}: ${from.name} → ${to.name}`;auditStore=from.id;
+  requirePermission('STOCK_TRANSFER');const from=store(c.from),to=store(c.to),p=product(c.productId);if(from.id===to.id)throw new RuleError('Escolha lojas diferentes.');move(from.id,p.id,-c.qty);resultId=crypto.randomUUID();next.transfers.unshift({id:resultId,from:from.id,to:to.id,productId:p.id,productName:p.name,qty:c.qty,status:'transit',createdAt:now,operator:actor.displayName});description=`${c.qty} × ${p.name}: ${from.name} → ${to.name}`;auditStore=from.id;
  }else if(c.type==='transfer.receive'){
-  admin();const t=next.transfers.find(t=>t.id===c.id);if(!t)throw new RuleError('Transferência não encontrada.',404);if(t.status!=='transit')throw new RuleError('Transferência já recebida.',409);store(t.to);move(t.to,t.productId,t.qty);t.status='received';t.receivedAt=now;resultId=t.id;description=`Recebimento de ${t.qty} × ${t.productName}`;auditStore=t.to;
+  requirePermission('STOCK_TRANSFER');const t=next.transfers.find(t=>t.id===c.id);if(!t)throw new RuleError('Transferência não encontrada.',404);if(t.status!=='transit')throw new RuleError('Transferência já recebida.',409);store(t.to);move(t.to,t.productId,t.qty);t.status='received';t.receivedAt=now;resultId=t.id;description=`Recebimento de ${t.qty} × ${t.productName}`;auditStore=t.to;
  }else if(c.type==='cash.open'){
   const s=store(c.storeId);if(next.cash.some(x=>x.storeId===s.id&&x.userId===actor.userId&&!x.closedAt))throw new RuleError('Você já tem um caixa aberto nesta loja.',409);resultId=crypto.randomUUID();next.cash.unshift({id:resultId,storeId:s.id,userId:actor.userId,operator:actor.displayName,openedAt:now,opening:c.opening});description=`Abertura de caixa em ${s.name}`;auditStore=s.id;
  }else if(c.type==='cash.close'){
