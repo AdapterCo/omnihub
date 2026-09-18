@@ -16,6 +16,16 @@ export function hasPermission(permissions: ReadonlySet<PermissionCode>, code: Pe
 }
 
 /**
+ * Garante que atores vinculados a uma loja específica só movimentem sua própria loja (§4, §5).
+ * Atores sem restrição de loja (storeId === null, ex.: OWNER/ADMIN global) podem acessar qualquer loja.
+ */
+export function requireStoreAccess(actor: { storeId?: string | null; role?: string }, targetStoreId: string): void {
+ if (actor.role !== 'admin' && actor.storeId && actor.storeId !== targetStoreId) {
+  throw new RuleError('Você não pode movimentar outra loja.', 403);
+ }
+}
+
+/**
  * Resolve o papel de sistema a partir do valor legado gravado em `memberships.role`
  * ('admin' | 'operator'). Usado apenas onde a origem das permissões ainda é a tabela
  * legada (fallback); a origem preferencial é `user_tenant_roles` (ver loadPermissions).

@@ -1,15 +1,38 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import test from 'node:test';
-import { emptyState, execute, visibleState, type Actor, type Entitlement } from '../lib/domain.ts';
-import { permissionsForRole } from '../lib/authz/roles.ts';
-const admin:Actor={userId:'admin',displayName:'Administrador',role:'admin',storeId:null,permissions:permissionsForRole('OWNER')};const now=1000000;const plan:Entitlement={status:'trial',accessUntil:now+10000,maxStores:3};
-function fixture(){let state=emptyState();function run(command:unknown,actor=admin,entitlement=plan,key=crypto.randomUUID()){const r=execute(state,actor,entitlement,command,key,now);state=r.state;return r}const a=run({type:'store.create',data:{name:'Matriz'}}).resultId!;const b=run({type:'store.create',data:{name:'Filial'}}).resultId!;const p=run({type:'product.create',data:{name:'Produto A',sku:'SKU-A',price:1990,cost:1000,minimum:2,unit:'UN'}}).resultId!;run({type:'stock.receive',storeId:a,productId:p,qty:10,reason:'Recebimento'});return {get state(){return state},run,a,b,p}}
-test('Venda exige caixa e reduz apenas estoque da loja; preço é do servidor',()=>{const f=fixture(),cmd={type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:2}],payment:'Dinheiro',customer:'',document:''};assert.throws(()=>f.run(cmd),/Abra seu caixa/);f.run({type:'cash.open',storeId:f.a,opening:1000});f.run(cmd);assert.equal(f.state.sales[0].total,3980);assert.equal(f.state.stock[f.a][f.p],8);assert.equal(f.state.stock[f.b][f.p],undefined);assert.equal(f.state.sales[0].fiscalStatus,'pending')});
-test('Sem estoque a venda não grava nem movimenta parcialmente',()=>{const f=fixture();f.run({type:'cash.open',storeId:f.a,opening:0});const before=structuredClone(f.state);assert.throws(()=>f.run({type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:11}],payment:'Dinheiro',customer:'',document:''}),/Estoque insuficiente/);assert.deepEqual(f.state,before)});
-test('Transferência reserva em trânsito e só admin confirma uma vez',()=>{const f=fixture(),operator={...admin,userId:'operator',role:'operator',storeId:f.a,permissions:permissionsForRole('OPERADOR_CAIXA')};const cmd={type:'transfer.create',from:f.a,to:f.b,productId:f.p,qty:3};assert.throws(()=>f.run(cmd,operator),/não tem permissão/);const id=f.run(cmd).resultId!;assert.equal(f.state.stock[f.a][f.p],7);assert.equal(f.state.stock[f.b][f.p],undefined);assert.throws(()=>f.run({type:'transfer.receive',id},operator),/não tem permissão/);f.run({type:'transfer.receive',id});assert.equal(f.state.stock[f.b][f.p],3);assert.throws(()=>f.run({type:'transfer.receive',id}),/já recebida/)});
-test('Operador consulta outras lojas, mas não movimenta nem vê vendas de outra',()=>{const f=fixture(),operator={...admin,userId:'operator',role:'operator',storeId:f.a,permissions:permissionsForRole('OPERADOR_CAIXA')};assert.throws(()=>f.run({type:'cash.open',storeId:f.b,opening:0},operator),/outra loja/);assert.throws(()=>f.run({type:'stock.receive',storeId:f.b,productId:f.p,qty:1,reason:'Entrada'},operator),/não tem permissão/);f.run({type:'cash.open',storeId:f.a,opening:100});f.run({type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:1}],payment:'Pix',customer:'Pessoa',document:''});const restricted=visibleState(f.state,{...operator,storeId:f.b});assert.equal(restricted.sales.length,0);assert.equal(restricted.cash.length,0);assert.equal(restricted.stock[f.a][f.p],9);assert.deepEqual(restricted.requests,{})});
-test('Assinatura expirada, suspensa ou limite de lojas bloqueiam no servidor',()=>{const f=fixture();for(const entitlement of [{...plan,accessUntil:now},{...plan,status:'unpaid'},{...plan,status:'canceled'}])assert.throws(()=>f.run({type:'store.create',data:{name:'Outra loja'}},admin,entitlement),/acesso terminou/);f.run({type:'store.create',data:{name:'Terceira'}});assert.throws(()=>f.run({type:'store.create',data:{name:'Quarta'}}),/Limite de lojas/);assert.throws(()=>f.run({type:'subscription.activate'}),/Confira os campos/)});
-test('Reenvio com mesma chave não duplica venda ou estoque',()=>{const f=fixture();f.run({type:'cash.open',storeId:f.a,opening:0});const command={type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:2}],payment:'Pix',customer:'',document:''},key=crypto.randomUUID();const first=f.run(command,admin,plan,key),second=f.run(command,admin,plan,key);assert.equal(first.resultId,second.resultId);assert.equal(second.replayed,true);assert.equal(f.state.sales.length,1);assert.equal(f.state.stock[f.a][f.p],8);assert.throws(()=>f.run({...command,customer:'Outra pessoa'},admin,plan,key),/já utilizado/)});
-test('Fechamento conta só dinheiro e permite concluir caixa após vencimento',()=>{const f=fixture();const cashId=f.run({type:'cash.open',storeId:f.a,opening:1000}).resultId!;for(const payment of ['Dinheiro','Pix','Cartão'])f.run({type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:1}],payment,customer:'',document:''});f.run({type:'cash.close',id:cashId,counted:2900},admin,{...plan,accessUntil:now});assert.equal(f.state.cash[0].expected,2990);assert.equal(f.state.cash[0].difference,-90);assert.throws(()=>f.run({type:'cash.close',id:cashId,counted:2990}),/já fechado/)});
-test('Reimpressão não altera estoque, total ou situação fiscal',()=>{const f=fixture();f.run({type:'cash.open',storeId:f.a,opening:0});const id=f.run({type:'sale.create',storeId:f.a,items:[{productId:f.p,qty:1}],payment:'Dinheiro',customer:'',document:''}).resultId!;f.run({type:'sale.print',id},admin,{...plan,accessUntil:now});assert.equal(f.state.sales[0].printCount,1);assert.equal(f.state.sales[0].total,1990);assert.equal(f.state.sales[0].fiscalStatus,'pending');assert.equal(f.state.stock[f.a][f.p],9)});
-test('Transferências rejeitam quantidades fracionadas sem alterar saldos',()=>{const f=fixture(),before=structuredClone(f.state);for(const qty of [1.01,0.5,0,-1])assert.throws(()=>f.run({type:'transfer.create',from:f.a,to:f.b,productId:f.p,qty}),/Confira os campos/);assert.deepEqual(f.state,before);f.run({type:'transfer.create',from:f.a,to:f.b,productId:f.p,qty:1});assert.equal(f.state.stock[f.a][f.p],9)});
+import { money, date, requireActive, storeFields, productFields, type Entitlement } from '../lib/domain.ts';
+
+// Fase 3 cortada (cutover): `execute()`/`State`/`visibleState` de lib/domain.ts foram
+// removidos porque cash/sale (últimas duas entidades que ainda viviam no JSON) viraram
+// relacionais (lib/cash, lib/sales). O que resta em lib/domain.ts são helpers puros e os
+// schemas comerciais reaproveitados por lib/catalog — testados aqui.
+
+test('money formata centavos como moeda brasileira', () => {
+ assert.match(money(199000), /R\$\s?1\.990,00/);
+ assert.match(money(0), /R\$\s?0,00/);
+});
+
+test('date formata no fuso de São Paulo', () => {
+ assert.match(date(1700000000000), /\d{2}\/\d{2}\/\d{4}/);
+});
+
+test('requireActive bloqueia quando o acesso expirou ou está suspenso', () => {
+ const now = 1000000;
+ const plan: Entitlement = { status: 'trial', accessUntil: now + 10000, maxStores: 3 };
+ for (const entitlement of [{ ...plan, accessUntil: now }, { ...plan, status: 'unpaid' }, { ...plan, status: 'canceled' }]) assert.throws(() => requireActive(entitlement, now), /acesso terminou/);
+ requireActive(plan, now);
+});
+
+test('storeFields exige nome com pelo menos 2 caracteres e valida formatos', () => {
+ assert.throws(() => storeFields.parse({ name: 'A' }));
+ assert.doesNotThrow(() => storeFields.parse({ name: 'Loja Centro' }));
+ assert.throws(() => storeFields.parse({ name: 'Loja', cnpj: '123' }));
+ assert.doesNotThrow(() => storeFields.parse({ name: 'Loja', cnpj: '12345678000199' }));
+});
+
+test('productFields separa campos comerciais de fiscais e valida NCM/CEST/CFOP', () => {
+ const parsed = productFields.parse({ name: 'Produto A', sku: 'SKU-1', price: 1990, cost: 1000, minimum: 2, unit: 'UN', ncm: '12345678' });
+ assert.equal(parsed.price, 1990);
+ assert.equal(parsed.ncm, '12345678');
+ assert.throws(() => productFields.parse({ name: 'Produto A', sku: 'SKU-1', price: 1990, cost: 1000, minimum: 2, unit: 'UN', ncm: '123' }));
+});
