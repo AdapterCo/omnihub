@@ -4,7 +4,7 @@ Primeira versão funcional privada para validar a gestão de lojas. Windows fica
 
 ## Implementado
 
-- Entrada pela identidade autenticada do Sites/ChatGPT. Uma conta por identidade; associação a conta e papel ficam no servidor.
+- Login por e-mail e senha (hash scrypt) com sessão em cookie HttpOnly validada no banco (`lib/auth/`, `app/api/auth/`). Cada conta (tenant) é criada no cadastro; papel e loja ficam no servidor.
 - RBAC centralizado (Fase 1, `lib/authz/`): catálogo de permissões e papéis de sistema (OWNER, ADMIN, GERENTE, OPERADOR_CAIXA, ESTOQUISTA, CONSULTA) normalizados em tabelas próprias (`users`, `roles`, `permissions`, `role_permissions`, `user_tenant_roles`, `user_stores`), com backfill automático dos vínculos existentes em `memberships`. As checagens de mutação em `lib/domain.ts` usam permissões (`STORE_CREATE`, `PRODUCT_EDIT`, `STOCK_ADJUST`, `STOCK_TRANSFER`, ...), não mais `role === 'admin'` espalhado.
 - Catálogo e estoque relacionais (Fase 2, `lib/catalog/`, `lib/inventory/`), **conectados ao PDV** (corte/cutover concluído): tabelas `stores`, `categories`, `products`, `product_fiscal_profiles`, `inventories`, `stock_movements`, `stock_transfers`, `stock_transfer_items`. Ajuste de estoque atômico via `UPDATE ... RETURNING` protegido por `CHECK (quantity >= 0)` no banco (sem janela de corrida em vendas concorrentes pelo último item); ledger completo de movimentações; ciclo de transferência com os 6 estados de §7 (o PDV usa `store.create/product.create/stock.receive/transfer.create/transfer.receive` como antes — a mudança é só no que acontece no servidor).
 - Caixa e venda relacionais (Fase 3, `lib/cash/`, `lib/sales/`), também conectados ao PDV: tabelas `cash_registers` (terminal), `cash_sessions`, `cash_movements` (sangria/suprimento — **novo**, §15), `sales`, `sale_items`, `sale_payments`, `non_fiscal_receipts`. `lib/domain.ts`'s antigo `execute()`/`State` (que processava caixa/venda sobre um JSON) foi removido — não sobrou nenhum comando fora do modelo relacional. Venda e baixa de estoque agora cabem num único `db.batch()` (verdadeiramente atômico: venda + itens + pagamentos + comprovante + estoque, tudo ou nada).
@@ -38,35 +38,35 @@ Esta é uma base de validação, não um sistema fiscal homologado nem uma assin
 - `accounts.state`/`accounts.revision` (a persistência JSON original) não são mais lidos pela aplicação a partir da Fase 3 — todo o estado operacional é relacional. As colunas continuam existindo (não foram removidas, para evitar uma migração destrutiva sem necessidade imediata) mas sem uso funcional; `revision` agora só serve de contador de ordenação para o frontend, sem checagem condicional de conflito.
 - A integração WebMCP de consulta é opcional e usa os mesmos dados já autorizados. Seu contrato não foi exercitado em um navegador com suporte nesta sessão. Não foi solicitado teste visual de navegador.
 
-## Desenvolvimento
+## Desenvolvimento e deploy (VPS)
 
-Node >=22.13, npm, Vinext, React, TypeScript, Cloudflare D1 e Drizzle. A integração Sites é preservada.
+Node >=22.13, npm, Next.js, React, TypeScript e **PostgreSQL**. Sem dependência de Cloudflare/ChatGPT Sites.
 
-- `npm run install:ci`
-- `npm run dev -- --hostname 127.0.0.1`
-- `npm run build`
-- `node node_modules/typescript/bin/tsc --noEmit`
-- `node --test tests/*.test.ts` (88 testes; Node com suporte nativo a TypeScript e a `node:sqlite`, validado em Node 26; a maioria sobe um SQLite real a partir das migrações do próprio repositório, incluindo as migrações fiscais 0006/0007)
-- `node tests/api-smoke.mjs` (servidor local na porta 5173, banco local migrado; cria apenas dados fictícios locais)
+Variáveis de ambiente obrigatórias:
 
-O login local `/signin-with-chatgpt?return_to=/` é simulado pelo plugin apenas em desenvolvimento. A publicação privada usa identidade fornecida pelo Sites. Não expor um servidor autônomo que aceite cabeçalhos de identidade sem proxy autenticador confiável.
+- `DATABASE_URL` — ex.: `postgres://usuario:senha@localhost:5432/omnihub`.
+- `FISCAL_SECRET_KEY` — segredo de ≥32 caracteres que criptografa certificados A1/CSC (sem ela, operações fiscais são bloqueadas).
+- `FISCAL_WORKER_INTERVAL_MS` (opcional) — intervalo do worker automático da fila fiscal; padrão 30000, `0` desliga. Ele roda dentro do próprio servidor (`instrumentation.ts`); com várias instâncias não duplica trabalho (claim atômico).
 
-Gerar migrações com `npm run db:generate`; não alterar migração já publicada. Para iniciar o banco local após o build:
+Passo a passo:
 
 ```
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_yielding_franklin_richards.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_material_sersi.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_vengeful_sphinx.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_wooden_patch.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_backfill_catalog_stock.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0005_wandering_cyclops.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0006_fiscal_foundation.sql
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0007_customers_suppliers.sql
+npm ci
+export DATABASE_URL=postgres://... FISCAL_SECRET_KEY=...
+npm run db:migrate     # aplica drizzle/*.sql (idempotente, registra em _migrations)
+npm run build
+npm run start         # Next.js em Node (porta 3000; PORT=... para mudar)
 ```
 
-Emissão fiscal real exige a variável de ambiente `FISCAL_SECRET_KEY` (≥32 caracteres, idealmente via KMS/secret manager) — sem ela, `lib/fiscal/certificate.ts` bloqueia qualquer operação com certificado A1 (não há fallback fixo no código).
+Use um gerenciador de processo (systemd/PM2) e um proxy reverso com HTTPS (nginx/Caddy) — o cookie de sessão é `Secure` em produção. Desenvolvimento: `npm run dev`.
 
-No ambiente Windows desta sessão, os auxiliares Sites encontram uma falha no shim npm. A alternativa validada foi executar o `npm-cli.js` instalado por seu caminho completo. Nenhuma credencial de publicação deve ser gravada no projeto.
+Verificação: `npx tsc --noEmit` e `npm test` (`node --test tests/*.test.ts`; os testes usam um SQLite em memória — `tests/helpers/fakeD1.ts` + `tests/helpers/sqlite-migrations/` — como dublê do banco).
+
+**Ao criar tabela/coluna:** adicionar uma nova migração em `drizzle/` (PostgreSQL) e o equivalente em `tests/helpers/sqlite-migrations/`; nunca alterar migração já aplicada.
+
+**Limitação registrada:** o adaptador `lib/db/pgAdapter.ts` e o schema `drizzle/0001_init.sql` seguem a sintaxe padrão do PostgreSQL, mas não foram executados contra um servidor Postgres real (o ambiente de desenvolvimento não tinha PostgreSQL). A primeira execução real de `npm run db:migrate` e do fluxo de cadastro/login na VPS é o teste de verdade.
+
+Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 
 ## Próxima etapa
 

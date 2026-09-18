@@ -128,6 +128,16 @@ Escopo definido pelo usuário via pergunta de esclarecimento nesta sessão (o us
 
 **Com esta entrega, a Fase 8 está concluída (backend + UI)**, com as ressalvas já registradas (sem Cron Trigger real, AuditLog before/after parcial, "otimização"/"dashboards" fora de escopo).
 
+## Migração para VPS (ChatGPT Sites/Cloudflare removidos)
+
+Pedido do usuário: remover tudo do "ChatGPT site" para subir numa VPS; escolhas dele: e-mail+senha, PostgreSQL, Next.js padrão em Node. As seções anteriores deste documento que descrevem D1/Cloudflare/OAuth do ChatGPT retratam o estado histórico.
+
+- **Diagnóstico:** o acoplamento estava em três camadas — autenticação por headers do proxy do ChatGPT Sites (`app/chatgpt-auth.ts`), runtime/banco Cloudflare (`env.DB` via `cloudflare:workers`, vinext, wrangler, plugin vite vendorizado, `.openai/hosting.json`) e o tipo global `D1Database` do `@cloudflare/workers-types`. `next@16` já era dependência direta e `db/index.ts`/`db/schema.ts` (Drizzle) eram código morto.
+- **Decisão de menor risco:** em vez de reescrever cerca de 20 módulos, `lib/db/pgAdapter.ts` implementa a mesma interface `D1Database` (`prepare/bind/first/all/run/batch`) sobre `pg.Pool` (`?`→`$n`; `batch` em transação; int8/numeric convertidos para `number`, pois o `pg` os devolve como string) e o tipo passou a ser declarado em `types/database.d.ts`. `RETURNING` e `ON CONFLICT ... DO UPDATE ... WHERE` já eram compatíveis. O único SQL específico de SQLite em `lib/` (`strftime` no relatório de vendas) foi substituído por agrupamento por dia em JS (UTC), portável entre os dois bancos.
+- **Schema:** consolidado em `drizzle/0001_init.sql` (instalação nova, sem dados a migrar; `integer`→`bigint` porque o `integer` do Postgres tem 4 bytes e estouraria com `Date.now()`); seed de permissões/papéis espelha `lib/authz/`. A migração de dados JSON (antiga 0004) não foi portada por não haver dados legados.
+- **Auth:** scrypt + sessão opaca em `sessions` (cookie HttpOnly/SameSite=Lax/Secure em produção); cadastro cria conta+dono+sessão atomicamente (`registerAccount`). Sem 2FA, recuperação de senha ou rate limit.
+- **Verificação:** `tsc` limpo, `next build` OK, 144/144 testes (dublê SQLite). **Não verificado:** execução contra PostgreSQL real — é o primeiro risco a checar na VPS.
+
 Este documento atende à primeira entrega exigida na seção 78. Descreve o estado observado e propostas; não afirma que os módulos propostos já existem. Nenhuma regra tributária, alíquota, classificação fiscal ou política comercial nova foi implementada nesta análise. A especificação do usuário prevalece sobre o README anterior e as decisões provisórias anteriores.
 
 ## 1. Arquitetura encontrada

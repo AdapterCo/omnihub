@@ -157,3 +157,32 @@ test('getFiscalJobsSummary retorna contagem por status e dead-letters recentes',
  assert.equal(summary.deadLetters.length, 1);
  assert.equal(summary.deadLetters[0].saleId, saleId);
 });
+
+test('runFiscalJobWorker recupera job preso em PROCESSING (processo caiu) e o executa', async () => {
+ const { db, saleId } = await fixture();
+ const jobId = await enqueueFiscalJob(db, 't1', { jobType: 'TRANSMIT_NFE', saleId, userId: owner.userId });
+ const old = Date.now() - 11 * 60_000;
+ await db.prepare("UPDATE fiscal_jobs SET status = 'PROCESSING', updated_at = ? WHERE id = ?").bind(old, jobId).run();
+
+ const result = await runFiscalJobWorker(db, AUTHORIZED_MOCK);
+ assert.equal(result.succeeded, 1);
+ const doc = await getNFeDocumentBySaleId(db, 't1', saleId, owner);
+ assert.equal(doc?.status, 'AUTHORIZED');
+});
+
+test('runFiscalJobWorker não toca em job PROCESSING recente (outra instância trabalhando)', async () => {
+ const { db, saleId } = await fixture();
+ const jobId = await enqueueFiscalJob(db, 't1', { jobType: 'TRANSMIT_NFE', saleId, userId: owner.userId });
+ await db.prepare("UPDATE fiscal_jobs SET status = 'PROCESSING', updated_at = ? WHERE id = ?").bind(Date.now(), jobId).run();
+ const result = await runFiscalJobWorker(db, AUTHORIZED_MOCK);
+ assert.equal(result.processed, 0);
+});
+
+test('startFiscalWorker: 0 desliga, valor inválido não inicia, valor válido inicia', async () => {
+ const { startFiscalWorker, stopFiscalWorker } = await import('../lib/fiscal/worker.ts');
+ const { db } = await fixture();
+ assert.equal(startFiscalWorker(db, { FISCAL_WORKER_INTERVAL_MS: '0' }), false);
+ assert.equal(startFiscalWorker(db, { FISCAL_WORKER_INTERVAL_MS: 'abc' }), false);
+ assert.equal(startFiscalWorker(db, { FISCAL_WORKER_INTERVAL_MS: '20' }), true);
+ stopFiscalWorker();
+});

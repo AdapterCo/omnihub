@@ -24,18 +24,27 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
     const storeFilter = input.storeId ? ' AND s.store_id = ?' : '';
     const storeArgs = input.storeId ? [input.storeId] : [];
 
-    const periodsRows = await db
+    // Agrupamento por dia feito em JS (UTC) porque a função de data do SQL difere entre
+    // SQLite (strftime) e PostgreSQL (to_char) — assim a mesma consulta roda nos dois.
+    const saleRows = await db
         .prepare(
-            `SELECT s.store_id AS storeId, s.store_name AS storeName,
-                    strftime('%Y-%m-%d', s.created_at / 1000, 'unixepoch') AS day,
-                    COUNT(*) AS count, SUM(s.total) AS total
+            `SELECT s.store_id AS storeId, s.store_name AS storeName, s.created_at AS createdAt, s.total AS total
              FROM sales s
-             WHERE s.tenant_id = ? AND s.status = 'COMPLETED' AND s.created_at BETWEEN ? AND ?${storeFilter}
-             GROUP BY s.store_id, day
-             ORDER BY day DESC`,
+             WHERE s.tenant_id = ? AND s.status = 'COMPLETED' AND s.created_at BETWEEN ? AND ?${storeFilter}`,
         )
         .bind(tenantId, from, to, ...storeArgs)
-        .all<{ storeId: string; storeName: string; day: string; count: number; total: number }>();
+        .all<{ storeId: string; storeName: string; createdAt: number; total: number }>();
+
+    const byDayStore = new Map<string, SalesReportPeriod>();
+    for (const r of saleRows.results ?? []) {
+        const day = new Date(Number(r.createdAt)).toISOString().slice(0, 10);
+        const key = `${day}|${r.storeId}`;
+        const entry = byDayStore.get(key) ?? { day, storeId: r.storeId, storeName: r.storeName, count: 0, total: 0 };
+        entry.count += 1;
+        entry.total += Number(r.total);
+        byDayStore.set(key, entry);
+    }
+    const periodsRows = { results: Array.from(byDayStore.values()).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : 0)) };
 
     const paymentsRows = await db
         .prepare(

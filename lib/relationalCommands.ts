@@ -188,7 +188,18 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         return JSON.stringify(doc);
     }
     if (command.type === 'fiscal.nfe.transmit') {
-        const doc = await transmitNFe(db, tenantId, command.saleId, actor);
+        let doc;
+        try {
+            doc = await transmitNFe(db, tenantId, command.saleId, actor);
+        } catch (err) {
+            // Falha de comunicação deixa o documento em SIGNED (retomável): enfileira o
+            // retry automático (§41) e devolve o erro ao usuário normalmente.
+            const current = await db.prepare('SELECT status FROM fiscal_documents WHERE sale_id = ? AND tenant_id = ?').bind(command.saleId, tenantId).first<{ status: string }>();
+            if (current?.status === 'SIGNED') {
+                await enqueueFiscalJob(db, tenantId, { jobType: 'TRANSMIT_NFE', saleId: command.saleId, userId: actor.userId, correlationId: context.correlationId ?? null }, now);
+            }
+            throw err;
+        }
         await audit({ description: `NF-e ${doc.status === 'AUTHORIZED' ? 'autorizada' : 'rejeitada'}: Chave ${doc.accessKey.slice(0, 8)}... ${doc.protocolNumber ? `Protocolo ${doc.protocolNumber}` : ''}`, entity: 'fiscal_document', entityId: doc.id, after: { status: doc.status, protocolNumber: doc.protocolNumber } });
         return JSON.stringify(doc);
     }

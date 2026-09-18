@@ -280,6 +280,15 @@ Agregações somente-leitura sobre dados já persistidos — nenhuma regra de ne
 
 ---
 
+## Migração para VPS (remoção do ChatGPT Sites/Cloudflare) — implementada
+
+Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalhe completo em `CLAUDE.md` (item "Migração para VPS") e passo a passo de deploy no `README.md`. As seções acima que citam D1, OAuth do ChatGPT ou `wrangler` são históricas.
+
+- **Feito:** remoção de todos os artefatos ChatGPT Sites/Cloudflare/vinext/drizzle-kit; `db/database.ts` + `lib/db/pgAdapter.ts` (Postgres com a interface `D1Database`, sem tocar `lib/*/service.ts`); `drizzle/0001_init.sql` + `npm run db:migrate`; auth por e-mail/senha (`lib/auth`, `app/auth.ts`, `app/api/auth/*`, tela de login/cadastro); `next build` padrão passa; **144/144 testes** (5 novos em `tests/auth.test.ts`), `tsc` sem erros.
+- **Pendente / não verificado:** rodar `db:migrate` e o cadastro/login contra um PostgreSQL real (o sandbox não tinha Postgres); recuperação de senha, verificação de e-mail, 2FA e limite de tentativas de login; (resolvido: worker automático da fila fiscal em `lib/fiscal/worker.ts`/`instrumentation.ts`, `FISCAL_WORKER_INTERVAL_MS`, retry automático após falha de rede na transmissão; ainda não validado em processo real de produção); `.kilo/`, `outputs/` e `dist/` locais (ignorados pelo git) podem ser apagados na VPS.
+
+---
+
 ## Situação das Lacunas e Próximos Passos
 
 | Item | Status | Detalhe |

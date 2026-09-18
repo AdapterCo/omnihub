@@ -1,4 +1,4 @@
-import { getChatGPTUser } from '@/app/chatgpt-auth';
+import { getCurrentUser } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, type Actor } from '@/lib/domain';
 import { commandSchema } from '@/lib/commands';
@@ -65,8 +65,8 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
 async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
 export async function GET(request:Request){
  try{
-  const user=await getChatGPTUser();if(!user)return reply({error:'Entre para acessar sua conta.',signIn:true},401);
-  const row=await account(user.userId);if(!row)return reply({setup:true,userName:user.displayName});
+  const user=await getCurrentUser();if(!user)return reply({error:'Entre para acessar sua conta.',signIn:true},401);
+  const row=await account(user.userId);if(!row)return reply({error:'Conta não encontrada para este usuário.',signIn:true},401);
   const danfeSaleId=new URL(request.url).searchParams.get('danfe');
   if(danfeSaleId){
    const {actor}=await context(row,user.userId);
@@ -100,25 +100,11 @@ export async function GET(request:Request){
 export async function POST(request:Request){
  try{
   const origin=request.headers.get('origin');if(!origin||origin!==new URL(request.url).origin)return reply({error:'Origem da solicitação inválida.'},403);
-  const user=await getChatGPTUser();if(!user)return reply({error:'Sessão encerrada. Entre novamente.',signIn:true},401);
+  const user=await getCurrentUser();if(!user)return reply({error:'Sessão encerrada. Entre novamente.',signIn:true},401);
   if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'Formato inválido.'},415);
   const raw=await request.text();if(raw.length>262144)return reply({error:'Solicitação muito grande.'},413);let body;try{body=JSON.parse(raw)}catch{return reply({error:'Solicitação inválida.'},400)}
   if(!body||typeof body!=='object')return reply({error:'Solicitação inválida.'},400);
   let row=await account(user.userId);
-  if(body.type==='account.create'){
-   if(row)return reply(await snapshot(row,user.userId));
-   const name=typeof body.name==='string'?body.name.trim():'';if(name.length<2||name.length>100)return reply({error:'Informe o nome da conta (2 a 100 caracteres).'},400);
-   const id=crypto.randomUUID(),now=Date.now(),db=database();
-   const ownerRole=await db.prepare("SELECT id FROM roles WHERE name='OWNER' AND tenant_id IS NULL").first<{id:string}>();
-   if(!ownerRole)throw new Error('Papel OWNER não encontrado. Execute as migrações de RBAC (Fase 1).');
-   try{await db.batch([
-    db.prepare('INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES (?,?,?,0,?,?,3,?)').bind(id,name,'{}','trial',now+7*24*60*60*1000,now),
-    db.prepare('INSERT INTO memberships (user_id,account_id,role,store_id,display_name) VALUES (?,?,?,NULL,?)').bind(user.userId,id,'admin',user.displayName),
-    db.prepare('INSERT INTO users (id,display_name,created_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name').bind(user.userId,user.displayName,now),
-    db.prepare('INSERT INTO user_tenant_roles (id,user_id,tenant_id,role_id) VALUES (?,?,?,?)').bind(crypto.randomUUID(),user.userId,id,ownerRole.id),
-   ])}catch(e){row=await account(user.userId);if(!row)throw e}
-   row=await account(user.userId);if(!row)throw new Error('Account creation failed');return reply(await snapshot(row,user.userId),201);
-  }
   if(!row)return reply({error:'Crie sua conta para continuar.'},403);
   if(typeof body.key!=='string'||!/^[a-f0-9-]{36}$/i.test(body.key))return reply({error:'Identificador de operação inválido.'},400);
   const db=database();const {actor,plan}=await context(row,user.userId);const now=Date.now();

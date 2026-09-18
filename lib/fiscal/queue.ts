@@ -14,12 +14,10 @@ import { SefazDirectGateway, type FiscalGateway } from './gateway.ts';
 // chamado sob demanda) → transmitNFe/cancelNFeDocument (mesmas funções síncronas já
 // testadas) → SEFAZ → resultado.
 //
-// LIMITAÇÃO EXPLÍCITA, NÃO ESCONDIDA: este projeto (vinext/Cloudflare Workers) gera o
-// `wrangler.json` automaticamente no build (`dist/server/wrangler.json`) — não há um
-// `wrangler.toml` editável no repositório para eu adicionar um Cron Trigger real sem
-// adivinhar configuração de infraestrutura. Por isso `runFiscalJobWorker` é exposto via
-// comando autenticado (`fiscal.jobs.process`), disparável manualmente pela UI ou por um
-// agendador externo que chame a API — não roda sozinho em background nesta entrega.
+// LIMITAÇÃO EXPLÍCITA, NÃO ESCONDIDA: `runFiscalJobWorker` só roda quando alguém chama o
+// comando autenticado `fiscal.jobs.process` (botão na UI). Não há processo em background
+// nesta entrega; na VPS, um agendador (cron/systemd timer) precisaria de uma credencial de
+// serviço para chamar a API — o login atual é só por sessão de usuário (cookie).
 //
 // Retry/backoff/dead-letter (§41): backoff exponencial com teto de 30 min, até
 // `maxAttempts` tentativas (padrão 5) antes de mover para DEAD_LETTER. "Nunca retries
@@ -46,6 +44,8 @@ export type FiscalJobSummary = {
 };
 
 type FiscalJobRow = FiscalJobSummary & { tenantId: string; userId: string; payload: string; correlationId: string | null };
+
+const STALE_PROCESSING_MS = 10 * 60_000;
 
 function backoffMs(attempts: number): number {
     return Math.min(30_000 * 2 ** attempts, 30 * 60_000);
@@ -126,6 +126,14 @@ export async function runFiscalJobWorker(
 ): Promise<{ processed: number; succeeded: number; failed: number; deadLettered: number }> {
     const batchSize = options.batchSize ?? 10;
     let processed = 0, succeeded = 0, failed = 0, deadLettered = 0;
+
+    // Job preso em PROCESSING (processo caiu no meio) volta para PENDING. Seguro contra
+    // duplicidade: transmitNFe/cancelNFeDocument bloqueiam documento já autorizado/cancelado
+    // e o worker trata "estado desejado já alcançado" como sucesso.
+    await db
+        .prepare(`UPDATE fiscal_jobs SET status = 'PENDING', updated_at = ? WHERE status = 'PROCESSING' AND updated_at < ?`)
+        .bind(now, now - STALE_PROCESSING_MS)
+        .run();
 
     for (let i = 0; i < batchSize; i++) {
         const job = await claimNextFiscalJob(db, now);
