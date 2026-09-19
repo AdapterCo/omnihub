@@ -316,6 +316,8 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 
 | **Correção pós-deploy (PostgreSQL real)** | **Concluído** | Apelidos camelCase vs minúsculas do Postgres (adaptador corrigido), handler de erro do pool, validação de período nos relatórios, modo de teste `TEST_DATABASE_URL`. Suíte 147/147 em SQLite e em PostgreSQL. Ver lista de melhorias pendentes em `docs/analise-inicial.md`. |
 
+| **Endurecimento de segurança** | **Concluído, com pendências** | Rate limit login/cadastro, scrypt assíncrono + limite de senha, IP confiável, cabeçalhos/CSP, Next 16.3.5 (0 vulnerabilidades). Pendentes: recuperação de senha, verificação de e-mail, 2FA (dependem de SMTP/decisão). 154 testes. |
+
 ---
 
 ## Como Rodar e Verificar
@@ -330,6 +332,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **139 testes passando** (0 falhas).
+   *Resultado esperado:* **154 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).

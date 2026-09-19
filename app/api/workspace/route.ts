@@ -15,6 +15,7 @@ import { getNFCeStoreConfig, getNFCeDanfeData, type NFCeStoreConfig } from '@/li
 import { buildDanfeHtml, buildDanfeNfceHtml } from '@/lib/fiscal/danfe';
 import { getSalesReport, getCashReport, getFiscalReport } from '@/lib/reports/service';
 import { getFiscalJobsSummary } from '@/lib/fiscal/queue';
+import { clientIp } from '@/lib/http/clientIp';
 import { withIdempotency } from '@/lib/idempotency';
 import { dispatchCommand } from '@/lib/relationalCommands';
 export const dynamic='force-dynamic';
@@ -113,7 +114,7 @@ export async function POST(request:Request){
   if(!parsed.success)return reply({error:'Confira os campos: '+parsed.error.issues.map(x=>x.message).join('; ')},400);
   const command=parsed.data;
   const fingerprint=JSON.stringify({actor:actor.userId,command});
-  const ip=request.headers.get('cf-connecting-ip')||request.headers.get('x-forwarded-for');
+  const ip=clientIp(request.headers);
   const {resultId}=await withIdempotency(db,row.id,body.key,fingerprint,()=>dispatchCommand(db,row!.id,actor,plan,command,now,{ip,correlationId:body.key}));
   await db.prepare('UPDATE accounts SET revision=revision+1 WHERE id=?').bind(row.id).run();
   row={...row,revision:row.revision+1};

@@ -13,7 +13,7 @@ import { createPgTestDb } from './pgTestDb.ts';
  * ver db/database.ts). Manter as duas sincronizadas ao adicionar uma tabela/coluna.
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS = ['0000_yielding_franklin_richards.sql', '0001_material_sersi.sql', '0002_vengeful_sphinx.sql', '0003_wooden_patch.sql', '0004_backfill_catalog_stock.sql', '0005_wandering_cyclops.sql', '0006_fiscal_foundation.sql', '0007_customers_suppliers.sql', '0008_fiscal_inutilizacao.sql', '0009_nfce_foundation.sql', '0010_audit_full.sql', '0011_fiscal_jobs.sql', '0012_auth_credentials.sql'];
+const MIGRATIONS = ['0000_yielding_franklin_richards.sql', '0001_material_sersi.sql', '0002_vengeful_sphinx.sql', '0003_wooden_patch.sql', '0004_backfill_catalog_stock.sql', '0005_wandering_cyclops.sql', '0006_fiscal_foundation.sql', '0007_customers_suppliers.sql', '0008_fiscal_inutilizacao.sql', '0009_nfce_foundation.sql', '0010_audit_full.sql', '0011_fiscal_jobs.sql', '0012_auth_credentials.sql', '0013_auth_rate_limits.sql'];
 
 type BoundStatement = {
     all<T>(): Promise<{ results: T[] }>;
@@ -38,7 +38,7 @@ function wrapStatement(raw: ReturnType<DatabaseSync['prepare']>, args: unknown[]
 
 export function createFakeD1() {
     // Modo opcional: PostgreSQL real (ver pgTestDb.ts). Padrão continua sendo o SQLite em memória.
-    if (process.env.TEST_DATABASE_URL) return createPgTestDb(process.env.TEST_DATABASE_URL, ['0001_init.sql']);
+    if (process.env.TEST_DATABASE_URL) return createPgTestDb(process.env.TEST_DATABASE_URL, ['0001_init.sql', '0002_auth_rate_limits.sql']);
     const sqlite = new DatabaseSync(':memory:');
     sqlite.exec('PRAGMA foreign_keys = ON;');
     for (const file of MIGRATIONS) {

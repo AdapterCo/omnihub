@@ -460,3 +460,8 @@ Cada fase é reversível e não remove funcionalidade existente antes de a subst
 - Código: `app/workspace.tsx` é um arquivo monolítico de linhas gigantes (manutenção difícil); `npm run lint` acusa 5 erros no arquivo (setState em effect, `Date.now()` no render, aspas sem escape) e ~3300 avisos (a maioria em `dist/`/`outputs/` — restringir o lint às pastas do código); alguns `catch` silenciosos na UI de relatórios.
 - Banco: `ROLLBACK` que falha em `batch()` mascara o erro original; e-mail duplicado em cadastros simultâneos vira 503 genérico (índice único protege, mas a mensagem devia ser 409); `toPositionalSql` troca todo `?` (quebraria com `?` dentro de literal de texto no SQL).
 - Relato do usuário "o navegador fecha sozinho": não há `window.close`/reload no código; não reproduzido. Investigar se persistir após o deploy (extensão/Brave/aba).
+
+
+## Endurecimento de segurança (2026-09-18)
+
+Implementado a partir da lista de melhorias da auditoria anterior: rate limit de login/cadastro (tabela `auth_rate_limits`), scrypt assíncrono + limite de 128 caracteres + hash fantasma, limpeza de sessões vencidas, `clientIp` confiável (`TRUSTED_PROXY_HOPS`), `REGISTRATION_ENABLED`, cabeçalhos de segurança/CSP (`next.config.ts`), Next 16.3.5 + `npm audit fix` (0 vulnerabilidades). Riscos residuais: bloqueio de e-mail por terceiros (DoS de conta por 15 min); CSP mantém `'unsafe-inline'` (Next injeta scripts inline; nonce exigiria renderização dinâmica); sem recuperação de senha, verificação de e-mail e 2FA (dependem de SMTP/decisão do usuário); sem CAPTCHA no cadastro. Se houver Cloudflare na frente do Traefik, definir `TRUSTED_PROXY_HOPS=2`.

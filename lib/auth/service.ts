@@ -1,5 +1,6 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { RuleError } from '../errors.ts';
+import { LOGIN_EMAIL_RULE, LOGIN_IP_RULE, REGISTER_IP_RULE, assertNotLocked, purgeExpiredAuthData, recordHit, resetBucket } from './rateLimit.ts';
 
 // Autenticação por e-mail + senha (substitui o antigo trust de headers do proxy do
 // ChatGPT Sites). Hash de senha via scrypt (nativo do Node, mesmo padrão criptográfico já
@@ -7,20 +8,28 @@ import { RuleError } from '../errors.ts';
 // aleatório gravado em `sessions`, validado no banco a cada requisição (revogável).
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 dias
 const SCRYPT_KEY_LENGTH = 64;
+// scrypt é caro de propósito: a versão assíncrona roda no pool de threads do libuv e não
+// congela o servidor (a síncrona bloqueava todas as requisições durante cada hash), e o
+// limite de tamanho impede usar senhas gigantes como vetor de DoS.
+export const MAX_PASSWORD_LENGTH = 128;
 
-export function hashPassword(password: string): string {
+function scryptAsync(password: string, salt: Buffer, length: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => scrypt(password, salt, length, (error, key) => (error ? reject(error) : resolve(key))));
+}
+
+export async function hashPassword(password: string): Promise<string> {
     const salt = randomBytes(16);
-    const hash = scryptSync(password, salt, SCRYPT_KEY_LENGTH);
+    const hash = await scryptAsync(password, salt, SCRYPT_KEY_LENGTH);
     return `${salt.toString('hex')}:${hash.toString('hex')}`;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
     const [saltHex, hashHex] = stored.split(':');
     if (!saltHex || !hashHex) return false;
     const salt = Buffer.from(saltHex, 'hex');
     const expected = Buffer.from(hashHex, 'hex');
     if (expected.length === 0) return false;
-    const actual = scryptSync(password, salt, expected.length);
+    const actual = await scryptAsync(password, salt, expected.length);
     return timingSafeEqual(actual, expected);
 }
 
@@ -35,6 +44,9 @@ export function validateEmail(rawEmail: string): string {
 export function validatePasswordStrength(password: string): void {
     if (typeof password !== 'string' || password.length < 8) {
         throw new RuleError('A senha deve ter ao menos 8 caracteres.', 400);
+    }
+    if (password.length > MAX_PASSWORD_LENGTH) {
+        throw new RuleError(`A senha deve ter no máximo ${MAX_PASSWORD_LENGTH} caracteres.`, 400);
     }
 }
 
@@ -93,7 +105,7 @@ export async function registerAccount(
 
     const userId = crypto.randomUUID();
     const accountId = crypto.randomUUID();
-    const passwordHash = hashPassword(input.password);
+    const passwordHash = await hashPassword(input.password);
     const token = randomBytes(32).toString('hex');
     const expiresAt = now + SESSION_TTL_MS;
 
@@ -114,9 +126,53 @@ export async function loginWithPassword(db: D1Database, rawEmail: string, passwo
         .prepare('SELECT id, password_hash AS passwordHash FROM users WHERE email = ?')
         .bind(email)
         .first<{ id: string; passwordHash: string | null }>();
-    // Mesma mensagem para e-mail inexistente e senha errada (não revela quais e-mails existem).
-    if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
-        throw new RuleError('E-mail ou senha inválidos.', 401);
-    }
+    // Mesma mensagem E mesmo custo de tempo para e-mail inexistente e senha errada: sem o
+    // hash "fantasma", a resposta rápida para e-mail desconhecido revelaria quais existem.
+    const tooLong = typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH;
+    const valid = tooLong ? false : user?.passwordHash ? await verifyPassword(password, user.passwordHash) : (await verifyPassword(password, await dummyHash()), false);
+    if (!user || !valid) throw new RuleError('E-mail ou senha inválidos.', 401);
     return createSession(db, user.id, now);
+}
+
+let dummyHashPromise: Promise<string> | null = null;
+function dummyHash(): Promise<string> {
+    dummyHashPromise ??= hashPassword(randomBytes(16).toString('hex'));
+    return dummyHashPromise;
+}
+
+export function isRegistrationEnabled(env: Record<string, string | undefined> = process.env): boolean {
+    return (env.REGISTRATION_ENABLED ?? 'true').trim().toLowerCase() !== 'false';
+}
+
+/** Login com limite de tentativas por e-mail e por IP (5 erros/15 min por e-mail, 20 por IP). */
+export async function guardedLogin(db: D1Database, rawEmail: string, password: string, ip: string | null, now = Date.now()) {
+    const email = validateEmail(rawEmail);
+    const emailBucket = `login:email:${email}`;
+    const ipBucket = `login:ip:${ip ?? 'desconhecido'}`;
+    await assertNotLocked(db, emailBucket, now);
+    await assertNotLocked(db, ipBucket, now);
+    try {
+        const session = await loginWithPassword(db, email, password, now);
+        await resetBucket(db, emailBucket);
+        await purgeExpiredAuthData(db, now);
+        return session;
+    } catch (error) {
+        if (error instanceof RuleError && error.status === 401) {
+            await recordHit(db, emailBucket, LOGIN_EMAIL_RULE, now);
+            await recordHit(db, ipBucket, LOGIN_IP_RULE, now);
+        }
+        throw error;
+    }
+}
+
+/** Cadastro com limite por IP (5 contas criadas/hora) e chave geral para desativar o cadastro. */
+export async function guardedRegister(db: D1Database, input: Parameters<typeof registerAccount>[1], ip: string | null, now = Date.now(), env: Record<string, string | undefined> = process.env) {
+    if (!isRegistrationEnabled(env)) throw new RuleError('O cadastro de novas contas está desativado neste servidor.', 403);
+    const bucket = `register:ip:${ip ?? 'desconhecido'}`;
+    await assertNotLocked(db, bucket, now);
+    const result = await registerAccount(db, input, now);
+    // Só conta cadastro efetivamente criado: erro de digitação no formulário não tranca ninguém.
+    await recordHit(db, bucket, REGISTER_IP_RULE, now);
+    await purgeExpiredAuthData(db, now);
+    return result;
 }

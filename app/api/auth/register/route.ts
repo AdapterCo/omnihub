@@ -1,6 +1,7 @@
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
-import { registerAccount } from '@/lib/auth/service';
+import { guardedRegister } from '@/lib/auth/service';
+import { clientIp } from '@/lib/http/clientIp';
 import { isSameOrigin, sessionCookieHeader } from '@/app/auth';
 
 export const dynamic = 'force-dynamic';
@@ -13,12 +14,11 @@ export async function POST(request: Request) {
         if (!body || typeof body.accountName !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string') {
             return reply({ error: 'Informe nome da conta, seu nome, e-mail e senha.' }, 400);
         }
-        const { token, expiresAt } = await registerAccount(database(), {
-            accountName: body.accountName,
-            displayName: body.displayName,
-            email: body.email,
-            password: body.password,
-        });
+        const { token, expiresAt } = await guardedRegister(
+            database(),
+            { accountName: body.accountName, displayName: body.displayName, email: body.email, password: body.password },
+            clientIp(request.headers),
+        );
         const res = reply({ ok: true }, 201);
         res.headers.append('Set-Cookie', sessionCookieHeader(token, expiresAt));
         return res;
