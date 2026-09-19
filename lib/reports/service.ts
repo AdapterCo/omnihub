@@ -14,7 +14,9 @@ export type SalesReportPayment = { method: string; amount: number };
 export type SalesReport = {
     periods: SalesReportPeriod[];
     payments: SalesReportPayment[];
-    totals: { count: number; total: number; avgTicket: number; cancelledCount: number };
+    // total = vendas não canceladas (já líquidas de desconto). Devoluções (§54) são abatidas à
+    // parte: netTotal = total - returnsTotal (devoluções feitas no período, pela data da devolução).
+    totals: { count: number; total: number; avgTicket: number; cancelledCount: number; discountTotal: number; returnsCount: number; returnsTotal: number; netTotal: number };
 };
 
 export async function getSalesReport(db: D1Database, tenantId: string, actor: Actor, input: SalesReportInput = {}): Promise<SalesReport> {
@@ -32,7 +34,7 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
         .prepare(
             `SELECT s.store_id AS storeId, s.store_name AS storeName, s.created_at AS createdAt, s.total AS total
              FROM sales s
-             WHERE s.tenant_id = ? AND s.status = 'COMPLETED' AND s.created_at BETWEEN ? AND ?${storeFilter}`,
+             WHERE s.tenant_id = ? AND s.status IN ('COMPLETED', 'REFUNDED') AND s.created_at BETWEEN ? AND ?${storeFilter}`,
         )
         .bind(tenantId, from, to, ...storeArgs)
         .all<{ storeId: string; storeName: string; createdAt: number; total: number }>();
@@ -53,7 +55,7 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
             `SELECT sp.method AS method, SUM(sp.amount) AS amount
              FROM sale_payments sp
              JOIN sales s ON s.id = sp.sale_id
-             WHERE s.tenant_id = ? AND s.status = 'COMPLETED' AND s.created_at BETWEEN ? AND ?${storeFilter}
+             WHERE s.tenant_id = ? AND s.status IN ('COMPLETED', 'REFUNDED') AND s.created_at BETWEEN ? AND ?${storeFilter}
              GROUP BY sp.method
              ORDER BY amount DESC`,
         )
@@ -64,6 +66,15 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
         .prepare(`SELECT COUNT(*) AS count FROM sales s WHERE s.tenant_id = ? AND s.status = 'CANCELLED' AND s.created_at BETWEEN ? AND ?${storeFilter}`)
         .bind(tenantId, from, to, ...storeArgs)
         .first<{ count: number }>();
+
+    const discountRow = await db
+        .prepare(`SELECT COALESCE(SUM(s.discount), 0) AS total FROM sales s WHERE s.tenant_id = ? AND s.status IN ('COMPLETED', 'REFUNDED') AND s.created_at BETWEEN ? AND ?${storeFilter}`)
+        .bind(tenantId, from, to, ...storeArgs)
+        .first<{ total: number }>();
+    const returnsRow = await db
+        .prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(r.total), 0) AS total FROM sale_returns r JOIN sales s ON s.id = r.sale_id WHERE r.tenant_id = ? AND r.created_at BETWEEN ? AND ?${storeFilter}`)
+        .bind(tenantId, from, to, ...storeArgs)
+        .first<{ count: number; total: number }>();
 
     const periods = periodsRows.results ?? [];
     const totalCount = periods.reduce((a, p) => a + p.count, 0);
@@ -77,6 +88,10 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
             total: totalAmount,
             avgTicket: totalCount > 0 ? Math.round(totalAmount / totalCount) : 0,
             cancelledCount: cancelledRow?.count ?? 0,
+            discountTotal: Number(discountRow?.total ?? 0),
+            returnsCount: Number(returnsRow?.count ?? 0),
+            returnsTotal: Number(returnsRow?.total ?? 0),
+            netTotal: totalAmount - Number(returnsRow?.total ?? 0),
         },
     };
 }
@@ -96,11 +111,12 @@ export type CashReportSession = {
     difference: number | null;
     supplies: number;
     withdrawals: number;
+    refunds: number; // §54: devoluções estornadas em dinheiro
 };
 
 export type CashReport = {
     sessions: CashReportSession[];
-    totals: { sessionCount: number; openCount: number; totalDifference: number; totalSupplies: number; totalWithdrawals: number };
+    totals: { sessionCount: number; openCount: number; totalDifference: number; totalSupplies: number; totalWithdrawals: number; totalRefunds: number };
 };
 
 export async function getCashReport(db: D1Database, tenantId: string, actor: Actor, input: CashReportInput = {}): Promise<CashReport> {
@@ -132,17 +148,18 @@ export async function getCashReport(db: D1Database, tenantId: string, actor: Act
         .bind(tenantId)
         .all<{ sessionId: string; type: string; amount: number }>();
 
-    const movementsBySession = new Map<string, { supplies: number; withdrawals: number }>();
+    const movementsBySession = new Map<string, { supplies: number; withdrawals: number; refunds: number }>();
     for (const m of movementRows.results ?? []) {
-        const entry = movementsBySession.get(m.sessionId) ?? { supplies: 0, withdrawals: 0 };
+        const entry = movementsBySession.get(m.sessionId) ?? { supplies: 0, withdrawals: 0, refunds: 0 };
         if (m.type === 'SUPPLY') entry.supplies += m.amount;
         if (m.type === 'WITHDRAWAL') entry.withdrawals += m.amount;
+        if (m.type === 'REFUND') entry.refunds += m.amount;
         movementsBySession.set(m.sessionId, entry);
     }
 
     const sessions: CashReportSession[] = (sessionRows.results ?? []).map((s) => {
-        const mv = movementsBySession.get(s.id) ?? { supplies: 0, withdrawals: 0 };
-        return { ...s, supplies: mv.supplies, withdrawals: mv.withdrawals };
+        const mv = movementsBySession.get(s.id) ?? { supplies: 0, withdrawals: 0, refunds: 0 };
+        return { ...s, supplies: mv.supplies, withdrawals: mv.withdrawals, refunds: mv.refunds };
     });
 
     return {
@@ -153,6 +170,7 @@ export async function getCashReport(db: D1Database, tenantId: string, actor: Act
             totalDifference: sessions.reduce((a, s) => a + (s.difference ?? 0), 0),
             totalSupplies: sessions.reduce((a, s) => a + s.supplies, 0),
             totalWithdrawals: sessions.reduce((a, s) => a + s.withdrawals, 0),
+            totalRefunds: sessions.reduce((a, s) => a + s.refunds, 0),
         },
     };
 }

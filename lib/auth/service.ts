@@ -134,6 +134,26 @@ export async function loginWithPassword(db: D1Database, rawEmail: string, passwo
     return createSession(db, user.id, now);
 }
 
+/**
+ * Confere e-mail + senha SEM criar sessão (usado para autorização de supervisor, §53).
+ * Devolve null para qualquer falha, com o mesmo custo de tempo em todos os casos.
+ */
+export async function checkCredentials(db: D1Database, rawEmail: string, password: string): Promise<{ id: string; displayName: string } | null> {
+    let email: string;
+    try {
+        email = validateEmail(rawEmail);
+    } catch {
+        return null;
+    }
+    const user = await db
+        .prepare('SELECT id, display_name AS displayName, password_hash AS passwordHash FROM users WHERE email = ?')
+        .bind(email)
+        .first<{ id: string; displayName: string; passwordHash: string | null }>();
+    const tooLong = typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH;
+    const valid = tooLong ? false : user?.passwordHash ? await verifyPassword(password, user.passwordHash) : (await verifyPassword(password, await dummyHash()), false);
+    return user && valid ? { id: user.id, displayName: user.displayName } : null;
+}
+
 let dummyHashPromise: Promise<string> | null = null;
 function dummyHash(): Promise<string> {
     dummyHashPromise ??= hashPassword(randomBytes(16).toString('hex'));

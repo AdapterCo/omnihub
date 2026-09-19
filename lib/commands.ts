@@ -35,10 +35,28 @@ export const saleCreateSchema = z.object({
     type: z.literal('sale.create'), storeId: identifier, items: z.array(z.object({ productId: identifier, qty })).min(1).max(100),
     customer: short, document: z.string().regex(/^(\d{11}|\d{14})?$/),
     payment: paymentMethod.optional(), payments: z.array(paymentLine).min(1).max(5).optional(),
+    // §53: desconto em percentual (até 2 casas) OU em valor (centavos), sempre com motivo.
+    discount: z.object({ percent: z.number().gt(0).lt(100).optional(), amount: z.number().int().min(1).max(100000000).optional(), reason: short.min(3) }).strict().optional(),
+    // Senha de supervisor quando o desconto passa do limite do operador. Nunca é gravada:
+    // a auditoria/log mascaram `password` e o fingerprint de idempotência é um hash.
+    authorization: z.object({ email: z.string().trim().max(160), password: z.string().min(1).max(128) }).strict().optional(),
 }).strict().refine(v => Number(!!v.payment) + Number(!!v.payments) === 1, { message: 'Informe payment ou payments (nunca os dois).' });
 export const salePrintSchema = z.object({ type: z.literal('sale.print'), id: identifier });
 export const saleCancelSchema = z.object({ type: z.literal('sale.cancel'), id: identifier, reason: short.min(3) });
-export const saleCommandSchema = z.union([saleCreateSchema, salePrintSchema, saleCancelSchema]);
+// §54: devolução parcial/total por item, com forma de estorno e retorno (ou não) ao estoque.
+export const saleReturnSchema = z.object({
+    type: z.literal('sale.return'),
+    saleId: identifier,
+    items: z.array(z.object({ productId: identifier, qty, restock: z.boolean() })).min(1).max(100),
+    reason: short.min(3),
+    refundMethod: paymentMethod,
+}).strict();
+// §53: limites de desconto por papel (percentual com até 2 casas). Sem valor padrão.
+export const discountLimitsSchema = z.object({
+    type: z.literal('discount.limits.save'),
+    limits: z.array(z.object({ role: z.string().min(1).max(40), percent: z.number().min(0).max(100) }).strict()).min(1).max(10),
+}).strict();
+export const saleCommandSchema = z.union([saleCreateSchema, salePrintSchema, saleCancelSchema, saleReturnSchema, discountLimitsSchema]);
 export type SaleCommand = z.infer<typeof saleCommandSchema>;
 
 export const userCommandSchema = z.discriminatedUnion('type', [

@@ -118,10 +118,11 @@ type SaleStockItem = { storeId: string; productId: string; qty: number };
  * `createSale`). `applySaleStockBatch` abaixo continua existindo para quem precisa só do
  * efeito de estoque isoladamente (ex.: cancelamento de venda).
  */
-export async function buildSaleStockStatements(db: D1Database, tenantId: string, items: SaleStockItem[], userId: string, referenceId: string, options: { reverse?: boolean } = {}, now = Date.now()) {
+export async function buildSaleStockStatements(db: D1Database, tenantId: string, items: SaleStockItem[], userId: string, referenceId: string, options: { reverse?: boolean; movementType?: StockMovementType; referenceType?: string } = {}, now = Date.now()) {
  if (items.length === 0) return [];
  const sign = options.reverse ? 1 : -1;
- const type: StockMovementType = options.reverse ? 'SALE_CANCEL' : 'SALE';
+ const type: StockMovementType = options.movementType ?? (options.reverse ? 'SALE_CANCEL' : 'SALE');
+ const referenceType = options.referenceType ?? 'sale';
  for (const item of items) {
   await db.prepare('INSERT INTO inventories (id, tenant_id, store_id, product_id, quantity) VALUES (?,?,?,?,0) ON CONFLICT(store_id, product_id) DO NOTHING').bind(crypto.randomUUID(), tenantId, item.storeId, item.productId).run();
  }
@@ -138,7 +139,7 @@ export async function buildSaleStockStatements(db: D1Database, tenantId: string,
   statements.push(
    db
     .prepare('INSERT INTO stock_movements (id, tenant_id, store_id, product_id, type, quantity, previous_quantity, new_quantity, reference_type, reference_id, user_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(crypto.randomUUID(), tenantId, item.storeId, item.productId, type, delta, previous, previous + delta, 'sale', referenceId, userId, now),
+    .bind(crypto.randomUUID(), tenantId, item.storeId, item.productId, type, delta, previous, previous + delta, referenceType, referenceId, userId, now),
   );
  }
  return statements;

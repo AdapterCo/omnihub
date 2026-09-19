@@ -164,17 +164,21 @@ export async function generateNFCeForSale(
 
     const sale = await db
         .prepare(
-            `SELECT id, store_id AS storeId, total, customer, document, status
+            `SELECT id, store_id AS storeId, total, returned_total AS returnedTotal, customer, document, status
              FROM sales WHERE id = ? AND tenant_id = ?`,
         )
         .bind(saleId, tenantId)
-        .first<{ id: string; storeId: string; total: number; customer: string | null; document: string | null; status: string }>();
+        .first<{ id: string; storeId: string; total: number; returnedTotal: number; customer: string | null; document: string | null; status: string }>();
 
     if (!sale) {
         throw new RuleError('Venda não encontrada.', 404);
     }
     if (sale.status === 'CANCELLED') {
         throw new RuleError('Não é possível emitir NFC-e para uma venda cancelada.', 400);
+    }
+    // §54: venda com devolução não gera documento fiscal pelo valor original (ver service.ts).
+    if (sale.status === 'REFUNDED' || Number(sale.returnedTotal) > 0) {
+        throw new RuleError('Esta venda possui devolução registrada; a emissão fiscal pelo valor original está bloqueada.', 409);
     }
 
     const existingDoc = await db
@@ -248,7 +252,7 @@ export async function generateNFCeForSale(
 
     const itemsRows = await db
         .prepare(
-            `SELECT si.product_id AS productId, si.qty AS qty, si.price AS priceCents,
+            `SELECT si.product_id AS productId, si.qty AS qty, si.price AS priceCents, si.discount AS discount,
                     p.name, p.sku, p.barcode, p.unit,
                     pfp.ncm, pfp.cest, pfp.legacy_cfop AS cfop, pfp.origin, pfp.tax_code AS taxCode
              FROM sale_items si
@@ -258,7 +262,7 @@ export async function generateNFCeForSale(
         )
         .bind(tenantId, saleId)
         .all<{
-            productId: string; qty: number; priceCents: number; name: string; sku: string; barcode: string | null;
+            productId: string; qty: number; priceCents: number; discount: number; name: string; sku: string; barcode: string | null;
             unit: string | null; ncm: string | null; cest: string | null; cfop: string | null; origin: string | null; taxCode: string | null;
         }>();
 
@@ -286,15 +290,18 @@ export async function generateNFCeForSale(
             qty: item.qty,
             unitPrice: item.priceCents,
             totalPrice: item.qty * item.priceCents,
+            discount: Number(item.discount),
             origin: item.origin || '',
             taxCode: item.taxCode || '',
         };
     });
 
     const paymentRows = await db.prepare(`SELECT method, amount AS amountCents FROM sale_payments WHERE sale_id = ?`).bind(saleId).all<{ method: string; amountCents: number }>();
-    const nfcePayments: NFePayment[] = paymentRows.results.length
-        ? paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }))
-        : [{ method: 'Dinheiro', amount: sale.total }];
+    // Nunca presumir forma de pagamento: venda sem pagamento registrado bloqueia a emissão.
+    if (!paymentRows.results.length) {
+        throw new RuleError('A venda não possui pagamentos registrados; não é possível emitir o documento fiscal.', 400);
+    }
+    const nfcePayments: NFePayment[] = paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }));
 
     // Destinatário na NFC-e é sempre opcional (§20: "identificação do consumidor quando
     // aplicável") — nunca força um CPF/CNPJ ou literal de homologação sobre uma venda que
@@ -433,14 +440,15 @@ export async function getNFCeDanfeData(db: D1Database, tenantId: string, saleId:
     const sale = await db.prepare(`SELECT document FROM sales WHERE id = ? AND tenant_id = ?`).bind(saleId, tenantId).first<{ document: string | null }>();
 
     const itemsRows = await db
-        .prepare(`SELECT si.qty AS qty, si.price AS unitPrice, si.name AS description, si.sku AS code FROM sale_items si WHERE si.sale_id = ?`)
+        .prepare(`SELECT si.qty AS qty, si.price AS unitPrice, si.discount AS discount, si.name AS description, si.sku AS code FROM sale_items si WHERE si.sale_id = ?`)
         .bind(saleId)
-        .all<{ qty: number; unitPrice: number; description: string; code: string }>();
+        .all<{ qty: number; unitPrice: number; discount: number; description: string; code: string }>();
 
     const paymentRows = await db.prepare(`SELECT method, amount FROM sale_payments WHERE sale_id = ?`).bind(saleId).all<{ method: string; amount: number }>();
 
     const items = itemsRows.results.map((i) => ({ code: i.code, description: i.description, ncm: '', cfop: '', unit: '', qty: i.qty, unitPrice: i.unitPrice, totalPrice: i.qty * i.unitPrice }));
-    const total = items.reduce((a, i) => a + i.totalPrice, 0);
+    const discount = itemsRows.results.reduce((a, i) => a + Number(i.discount), 0);
+    const total = items.reduce((a, i) => a + i.totalPrice, 0) - discount;
 
     return {
         accessKey: doc.accessKey,
@@ -455,5 +463,6 @@ export async function getNFCeDanfeData(db: D1Database, tenantId: string, saleId:
         items,
         payments: paymentRows.results.map((p) => ({ method: p.method, amount: p.amount })),
         total,
+        discount,
     };
 }

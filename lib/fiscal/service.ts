@@ -368,7 +368,7 @@ export async function generateNFeForSale(
     // 1. Carrega a venda
     const sale = await db
         .prepare(
-            `SELECT id, store_id AS storeId, user_id AS userId, total, customer, document, status, created_at AS createdAt
+            `SELECT id, store_id AS storeId, user_id AS userId, total, returned_total AS returnedTotal, customer, document, status, created_at AS createdAt
              FROM sales
              WHERE id = ? AND tenant_id = ?`,
         )
@@ -378,6 +378,7 @@ export async function generateNFeForSale(
             storeId: string;
             userId: string;
             total: number;
+            returnedTotal: number;
             customer: string | null;
             document: string | null;
             status: string;
@@ -389,6 +390,11 @@ export async function generateNFeForSale(
     }
     if (sale.status === 'CANCELLED') {
         throw new RuleError('Não é possível emitir NF-e para uma venda cancelada.', 400);
+    }
+    // §54: venda com devolução não pode gerar documento fiscal pelo valor original (a nota de
+    // devolução ainda não existe) — bloqueia em vez de emitir um valor que não reflete a venda.
+    if (sale.status === 'REFUNDED' || Number(sale.returnedTotal) > 0) {
+        throw new RuleError('Esta venda possui devolução registrada; a emissão fiscal pelo valor original está bloqueada.', 409);
     }
 
     // 2. Impede duplicidade de emissão para a mesma venda
@@ -479,7 +485,7 @@ export async function generateNFeForSale(
     // 5. Carrega itens da venda e respectivos perfis fiscais
     const itemsRows = await db
         .prepare(
-            `SELECT si.product_id AS productId, si.qty AS qty, si.price AS priceCents,
+            `SELECT si.product_id AS productId, si.qty AS qty, si.price AS priceCents, si.discount AS discount,
                     p.name, p.sku, p.barcode, p.unit,
                     pfp.ncm, pfp.cest, pfp.legacy_cfop AS cfop, pfp.origin, pfp.tax_code AS taxCode
              FROM sale_items si
@@ -492,6 +498,7 @@ export async function generateNFeForSale(
             productId: string;
             qty: number;
             priceCents: number;
+            discount: number;
             name: string;
             sku: string;
             barcode: string | null;
@@ -530,6 +537,7 @@ export async function generateNFeForSale(
             qty: item.qty,
             unitPrice: item.priceCents,
             totalPrice: item.qty * item.priceCents,
+            discount: Number(item.discount),
             // Nunca presumir (§36): repassa exatamente o que está cadastrado no produto;
             // buildNFeXml bloqueia a emissão se estiver vazio ou não suportado.
             origin: item.origin || '',
@@ -543,9 +551,11 @@ export async function generateNFeForSale(
         .bind(saleId)
         .all<{ method: string; amountCents: number }>();
 
-    const nfePayments: NFePayment[] = paymentRows.results.length
-        ? paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }))
-        : [{ method: 'Dinheiro', amount: sale.total }];
+    // Nunca presumir forma de pagamento: venda sem pagamento registrado bloqueia a emissão.
+    if (!paymentRows.results.length) {
+        throw new RuleError('A venda não possui pagamentos registrados; não é possível emitir o documento fiscal.', 400);
+    }
+    const nfePayments: NFePayment[] = paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }));
 
     // 7. Destinatário (em homologação, se não informado na venda, preenche consumidor homologação)
     const recipient = sale.document
@@ -1198,7 +1208,7 @@ export async function getDanfeData(db: D1Database, tenantId: string, saleId: str
 
     const itemsRows = await db
         .prepare(
-            `SELECT si.qty AS qty, si.price AS unitPrice, si.name AS description, si.sku AS code,
+            `SELECT si.qty AS qty, si.price AS unitPrice, si.discount AS discount, si.name AS description, si.sku AS code,
                     pfp.ncm, pfp.legacy_cfop AS cfop, p.unit
              FROM sale_items si
              JOIN products p ON p.id = si.product_id
@@ -1206,12 +1216,13 @@ export async function getDanfeData(db: D1Database, tenantId: string, saleId: str
              WHERE si.sale_id = ?`,
         )
         .bind(saleId)
-        .all<{ qty: number; unitPrice: number; description: string; code: string; ncm: string | null; cfop: string | null; unit: string | null }>();
+        .all<{ qty: number; unitPrice: number; discount: number; description: string; code: string; ncm: string | null; cfop: string | null; unit: string | null }>();
 
     const paymentRows = await db.prepare(`SELECT method, amount FROM sale_payments WHERE sale_id = ?`).bind(saleId).all<{ method: string; amount: number }>();
 
     const items = itemsRows.results.map((i) => ({ code: i.code, description: i.description, ncm: i.ncm ?? '', cfop: i.cfop ?? '', unit: i.unit ?? '', qty: i.qty, unitPrice: i.unitPrice, totalPrice: i.qty * i.unitPrice }));
-    const total = items.reduce((a, i) => a + i.totalPrice, 0);
+    const discount = itemsRows.results.reduce((a, i) => a + Number(i.discount), 0);
+    const total = items.reduce((a, i) => a + i.totalPrice, 0) - discount;
 
     return {
         accessKey: doc.accessKey,
@@ -1225,6 +1236,7 @@ export async function getDanfeData(db: D1Database, tenantId: string, saleId: str
         items,
         payments: paymentRows.results.map((p) => ({ method: p.method, amount: p.amount })),
         total,
+        discount,
     };
 }
 

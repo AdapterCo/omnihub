@@ -224,6 +224,7 @@ export function validateNFeXmlSchema(xml: string, expectedModel: '55' | '65' = '
     }
 
     let calculatedTotalProducts = 0;
+    let calculatedTotalDiscount = 0; // §53: soma dos <vDesc> por item
 
     detXmlList.forEach((detXml, index) => {
         const itemNumber = index + 1;
@@ -260,6 +261,15 @@ export function validateNFeXmlSchema(xml: string, expectedModel: '55' | '65' = '
             calculatedTotalProducts += Math.round(parseFloat(vProdStr) * 100);
         }
 
+        const vDescStr = extractTag(prodXml, 'vDesc');
+        if (vDescStr !== null && vDescStr !== undefined && vDescStr !== '') {
+            if (isNaN(parseFloat(vDescStr)) || parseFloat(vDescStr) < 0) {
+                errors.push({ path: `/NFe/infNFe/det[${itemNumber}]/prod/vDesc`, message: 'vDesc inválido.' });
+            } else {
+                calculatedTotalDiscount += Math.round(parseFloat(vDescStr) * 100);
+            }
+        }
+
         const impostoXml = extractTag(detXml, 'imposto');
         if (!impostoXml) {
             errors.push({ path: `/NFe/infNFe/det[${itemNumber}]/imposto`, message: 'Grupo tributário <imposto> ausente no item.' });
@@ -294,10 +304,20 @@ export function validateNFeXmlSchema(xml: string, expectedModel: '55' | '65' = '
                     message: `Totalizador vProd (${vProdTot}) diverge da soma dos itens (${(calculatedTotalProducts / 100).toFixed(2)}).`,
                 });
             }
-            if (totalNFCents !== calculatedTotalProducts) {
+            const vDescTot = extractTag(icmsTot, 'vDesc');
+            const totalDescCents = Math.round(parseFloat(vDescTot || '0') * 100);
+            if (totalDescCents !== calculatedTotalDiscount) {
+                errors.push({
+                    path: '/NFe/infNFe/total/ICMSTot/vDesc',
+                    message: `Totalizador vDesc (${vDescTot}) diverge da soma dos descontos dos itens (${(calculatedTotalDiscount / 100).toFixed(2)}).`,
+                });
+            }
+            // vNF = produtos - descontos (demais componentes do total ainda não são gerados: 0.00).
+            const expectedNF = calculatedTotalProducts - calculatedTotalDiscount;
+            if (totalNFCents !== expectedNF) {
                 errors.push({
                     path: '/NFe/infNFe/total/ICMSTot/vNF',
-                    message: `Valor total da NF-e vNF (${vNFTot}) diverge do somatório de produtos (${(calculatedTotalProducts / 100).toFixed(2)}).`,
+                    message: `Valor total da NF-e vNF (${vNFTot}) diverge de produtos menos descontos (${(expectedNF / 100).toFixed(2)}).`,
                 });
             }
         }
@@ -329,10 +349,11 @@ export function validateNFeXmlSchema(xml: string, expectedModel: '55' | '65' = '
             }
         });
 
-        if (totalPaymentsCents < calculatedTotalProducts) {
+        const netInvoiceCents = calculatedTotalProducts - calculatedTotalDiscount;
+        if (totalPaymentsCents < netInvoiceCents) {
             errors.push({
                 path: '/NFe/infNFe/pag',
-                message: `Somatório dos pagamentos (${(totalPaymentsCents / 100).toFixed(2)}) é inferior ao total da nota (${(calculatedTotalProducts / 100).toFixed(2)}).`,
+                message: `Somatório dos pagamentos (${(totalPaymentsCents / 100).toFixed(2)}) é inferior ao total da nota (${(netInvoiceCents / 100).toFixed(2)}).`,
             });
         }
     }

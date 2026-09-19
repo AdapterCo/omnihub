@@ -40,7 +40,8 @@ export type NFeItem = {
     unit: string;
     qty: number;
     unitPrice: number; // em centavos
-    totalPrice: number; // em centavos
+    totalPrice: number; // em centavos (bruto: qtd x preço, antes do desconto)
+    discount?: number; // em centavos: desconto rateado neste item (§53) -> <vDesc>
     origin?: string; // 0 a 8
     taxCode?: string; // CSOSN (ex: 102) ou CST (ex: 00)
 };
@@ -209,9 +210,15 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
 
     // 4. Grupo det (Itens)
     let totalProductsCents = 0;
+    let totalDiscountCents = 0;
     items.forEach((item, index) => {
         const nItem = index + 1;
         totalProductsCents += item.totalPrice;
+        const itemDiscount = item.discount ?? 0;
+        if (!Number.isInteger(itemDiscount) || itemDiscount < 0 || itemDiscount > item.totalPrice) {
+            throw new RuleError(`Item '${item.description}' possui desconto inválido (${itemDiscount}) para o valor do item (${item.totalPrice}).`, 400);
+        }
+        totalDiscountCents += itemDiscount;
 
         const cleanNcm = item.ncm.replace(/\D/g, '');
         if (cleanNcm.length !== 8) {
@@ -247,6 +254,8 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
         xml += `<uTrib>${escapeXml(item.unit)}</uTrib>`;
         xml += `<qTrib>${formatQty(item.qty)}</qTrib>`;
         xml += `<vUnTrib>${formatUnit(item.unitPrice)}</vUnTrib>`;
+        // Ordem do schema (TProd): vFrete, vSeg, vDesc, vOutro, indTot.
+        if (itemDiscount > 0) xml += `<vDesc>${formatMoney(itemDiscount)}</vDesc>`;
         xml += `<indTot>1</indTot>`;
         xml += `</prod>`;
 
@@ -294,7 +303,13 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
         xml += `</det>`;
     });
 
-    // 5. Grupo total
+    // 5. Grupo total. vNF = produtos - descontos; o que foi pago tem que fechar com esse valor,
+    // senão o documento sairia inconsistente com a venda (bloqueia em vez de ajustar).
+    const netTotalCents = totalProductsCents - totalDiscountCents;
+    const paymentsTotalCents = payments.reduce((sum, p) => sum + p.amount, 0);
+    if (paymentsTotalCents !== netTotalCents) {
+        throw new RuleError(`A soma dos pagamentos (${formatMoney(paymentsTotalCents)}) não confere com o valor total do documento (${formatMoney(netTotalCents)}).`, 400);
+    }
     xml += `<total>`;
     xml += `<ICMSTot>`;
     xml += `<vBC>0.00</vBC>`;
@@ -311,14 +326,14 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     xml += `<vProd>${formatMoney(totalProductsCents)}</vProd>`;
     xml += `<vFrete>0.00</vFrete>`;
     xml += `<vSeg>0.00</vSeg>`;
-    xml += `<vDesc>0.00</vDesc>`;
+    xml += `<vDesc>${formatMoney(totalDiscountCents)}</vDesc>`;
     xml += `<vII>0.00</vII>`;
     xml += `<vIPI>0.00</vIPI>`;
     xml += `<vIPIDevol>0.00</vIPIDevol>`;
     xml += `<vPIS>0.00</vPIS>`;
     xml += `<vCOFINS>0.00</vCOFINS>`;
     xml += `<vOutro>0.00</vOutro>`;
-    xml += `<vNF>${formatMoney(totalProductsCents)}</vNF>`;
+    xml += `<vNF>${formatMoney(netTotalCents)}</vNF>`;
     xml += `</ICMSTot>`;
     xml += `</total>`;
 

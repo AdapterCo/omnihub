@@ -5,6 +5,8 @@ import { createStore, updateStore, createProduct, updateProduct, countStores, ge
 import { receiveStock, createTransfer, approveTransfer, dispatchTransfer, receiveTransfer, cancelTransfer } from './inventory/service.ts';
 import { openSession, closeSession, recordMovement } from './cash/service.ts';
 import { createSale, printSale, cancelSale } from './sales/service.ts';
+import { returnSale } from './sales/returns.ts';
+import { listDiscountLimits, saveDiscountLimits } from './sales/discount.ts';
 import { recordAudit } from './audit/service.ts';
 import { assignTenantUser, removeTenantUser } from './users/service.ts';
 import { createCustomer, updateCustomer, createSupplier, updateSupplier } from './customers/service.ts';
@@ -119,8 +121,38 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
     }
     if (command.type === 'sale.create') {
         const id = await createSale(db, tenantId, command, actor, now);
-        await audit({ description: `Venda ${id.slice(0, 8)}`, entity: 'sale', entityId: id, after: { items: command.items, payments: command.payments } });
+        // §53: registra quem concedeu e quem autorizou o desconto. A senha do supervisor
+        // nunca entra na auditoria (só o e-mail informado é descartado também).
+        const granted = command.discount
+            ? await db.prepare('SELECT discount, discount_authorized_by AS authorizedBy, discount_authorized_by_name AS authorizedByName FROM sales WHERE id = ?').bind(id).first<{ discount: number; authorizedBy: string | null; authorizedByName: string }>()
+            : null;
+        await audit({
+            description: granted ? `Venda ${id.slice(0, 8)} com desconto de R$ ${(Number(granted.discount) / 100).toFixed(2)}${granted.authorizedBy ? ` autorizado por ${granted.authorizedByName}` : ''}` : `Venda ${id.slice(0, 8)}`,
+            entity: 'sale',
+            entityId: id,
+            after: {
+                items: command.items,
+                payments: command.payments,
+                ...(granted ? { discount: { amount: Number(granted.discount), reason: command.discount?.reason, grantedBy: actor.userId, authorizedBy: granted.authorizedBy } } : {}),
+            },
+        });
         return id;
+    }
+    if (command.type === 'sale.return') {
+        const id = await returnSale(db, tenantId, command, actor, now);
+        await audit({
+            description: `Devolução da venda ${command.saleId.slice(0, 8)}: ${command.reason}`,
+            entity: 'sale_return',
+            entityId: id,
+            after: { saleId: command.saleId, items: command.items, refundMethod: command.refundMethod, reason: command.reason },
+        });
+        return id;
+    }
+    if (command.type === 'discount.limits.save') {
+        const before = await listDiscountLimits(db, tenantId, actor);
+        const after = await saveDiscountLimits(db, tenantId, command.limits, actor, now);
+        await audit({ description: 'Limites de desconto por papel atualizados', entity: 'discount_limits', entityId: tenantId, before, after });
+        return tenantId;
     }
     if (command.type === 'sale.print') {
         await printSale(db, tenantId, command.id, actor);

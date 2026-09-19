@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getCurrentUser, isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, type Actor } from '@/lib/domain';
@@ -7,6 +8,7 @@ import { listStores, listProductsForSnapshot } from '@/lib/catalog/service';
 import { listStockMapForTenant, listTransfersForSnapshot } from '@/lib/inventory/service';
 import { listSessionsForSnapshot } from '@/lib/cash/service';
 import { listSalesForSnapshot } from '@/lib/sales/service';
+import { getSystemRole, getDiscountLimitBp, listDiscountLimits } from '@/lib/sales/discount';
 import { listAudit } from '@/lib/audit/service';
 import { listTenantUsers } from '@/lib/users/service';
 import { listCustomers, listSuppliers } from '@/lib/customers/service';
@@ -55,13 +57,17 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
   fiscalDocuments = await listFiscalDocumentsForSnapshot(db, tenantId, actor);
   fiscalInutilizations = await listFiscalInutilizationsForSnapshot(db, tenantId, actor);
  }
- if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs};
+ // §53: limite de desconto do próprio usuário (a tela decide quando pedir supervisor) e, para
+ // quem pode configurar, a lista de limites por papel.
+ const myDiscountLimitBp=await getDiscountLimitBp(db,tenantId,await getSystemRole(db,tenantId,actor.userId));
+ const discountLimits=actor.permissions.has('SALE_DISCOUNT_CONFIG')?await listDiscountLimits(db,tenantId,actor):undefined;
+ if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits};
  return {
   stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
   cash:cash.filter(c=>c.storeId===actor.storeId).map(c=>c.closedAt?c:{...c,opening:0}),
   sales:sales.filter(s=>s.storeId===actor.storeId),
   audit:relationalAudit.filter(a=>a.storeId===actor.storeId),
-  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,
+  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,
  };
 }
 async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
@@ -114,7 +120,9 @@ export async function POST(request:Request){
   const parsed=commandSchema.safeParse(body.command);
   if(!parsed.success)return reply({error:'Confira os campos: '+parsed.error.issues.map(x=>x.message).join('; ')},400);
   const command=parsed.data;
-  const fingerprint=JSON.stringify({actor:actor.userId,command});
+  // Hash do comando: a idempotência guarda o fingerprint no banco, e o comando pode conter a
+  // senha de um supervisor (§53) — nunca gravar em texto.
+  const fingerprint=createHash('sha256').update(JSON.stringify({actor:actor.userId,command})).digest('hex');
   const ip=clientIp(request.headers);
   const {resultId}=await withIdempotency(db,row.id,body.key,fingerprint,()=>dispatchCommand(db,row!.id,actor,plan,command,now,{ip,correlationId:body.key}));
   await db.prepare('UPDATE accounts SET revision=revision+1 WHERE id=?').bind(row.id).run();

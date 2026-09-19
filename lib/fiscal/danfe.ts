@@ -22,7 +22,8 @@ export type DanfeData = {
     recipient: { name: string; document: string };
     items: DanfeItem[];
     payments: DanfePayment[];
-    total: number;
+    total: number; // líquido (já sem o desconto)
+    discount?: number; // §53: desconto total da venda, em centavos
 };
 
 function formatMoney(cents: number): string {
@@ -109,6 +110,7 @@ ${watermark}
 </table>
 <div class="section-title">Formas de Pagamento</div>
 <table><tbody>${paymentsRows}</tbody></table>
+${data.discount ? `<p>Valor dos produtos: R$ ${formatMoney(data.total + data.discount)}</p><p>Desconto: -R$ ${formatMoney(data.discount)}</p>` : ''}
 <p class="total">Valor Total da NF-e: R$ ${formatMoney(data.total)}</p>
 </body></html>`;
 }
@@ -125,7 +127,8 @@ export type DanfeNfceData = {
     consumer?: { document: string } | null;
     items: DanfeItem[];
     payments: DanfePayment[];
-    total: number;
+    total: number; // líquido (já sem o desconto)
+    discount?: number; // §53: desconto total da venda, em centavos
 };
 
 /**
@@ -178,6 +181,7 @@ ${watermark}
 <thead><tr><th>Item</th><th class="num">Qtd.</th><th class="num">Vl. Unit.</th><th class="num">Vl. Total</th></tr></thead>
 <tbody>${itemsRows}</tbody>
 </table>
+${data.discount ? `<p class="center">Subtotal: R$ ${formatMoney(data.total + data.discount)} | Desconto: -R$ ${formatMoney(data.discount)}</p>` : ''}
 <p class="total center">TOTAL: R$ ${formatMoney(data.total)}</p>
 <div class="section-title">Formas de Pagamento</div>
 <table><tbody>${paymentsRows}</tbody></table>

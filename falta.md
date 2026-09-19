@@ -321,6 +321,9 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Operação: health check, logs, backup** | **Concluído, backup não testado com pg_dump real** | `/api/health`, logs JSON com requestId, backup diário com retenção + `restore-test.sh`. Rodar o teste de restauração na VPS e configurar cópia externa. |
 | **Correção de fuso horário (fiscal e relatórios)** | **Concluído** | `dhEmi`/`dhEvento` 3 h no futuro, AAMM da chave e relatório em UTC corrigidos via `lib/time.ts`; 5 testes de regressão. Ainda vale conferir contra a SEFAZ real. |
 
+| **Descontos (§53)** | **Concluído** | Limites por papel/conta sem valor padrão, autorização de supervisor (428 + senha), registro de quem concedeu/autorizou, rateio por item, `vDesc` na NF-e/NFC-e, relatórios e UI. Falta desconto por item e política de limites por loja. |
+| **Devoluções e estornos (§54)** | **Concluído, com ressalva fiscal** | Parcial/total, estorno em dinheiro/Pix/cartão, retorno opcional ao estoque, venda nunca apagada. Venda com documento fiscal ativo é bloqueada até existir nota de devolução (finNFe=4). |
+
 ---
 
 ## Como Rodar e Verificar
@@ -335,6 +338,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **170 testes passando** (0 falhas).
+   *Resultado esperado:* **202 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).
