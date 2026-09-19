@@ -1,4 +1,5 @@
 import { runFiscalJobWorker } from './queue.ts';
+import { logger } from '../log.ts';
 
 // Processamento automático da fila fiscal (§41): laço em processo, iniciado uma vez por
 // servidor Node em instrumentation.ts. Seguro com várias instâncias: cada job é
@@ -15,7 +16,7 @@ export function startFiscalWorker(db: D1Database, env: Record<string, string | u
     const raw = env.FISCAL_WORKER_INTERVAL_MS;
     const intervalMs = raw === undefined || raw === '' ? DEFAULT_INTERVAL_MS : Number(raw);
     if (!Number.isFinite(intervalMs) || intervalMs < 0) {
-        console.error(`FISCAL_WORKER_INTERVAL_MS inválida ("${raw}"): worker fiscal não iniciado.`);
+        logger.error('fiscal-worker.config_invalida', { variavel: 'FISCAL_WORKER_INTERVAL_MS', valor: raw });
         return false;
     }
     if (intervalMs === 0) return false;
@@ -26,10 +27,10 @@ export function startFiscalWorker(db: D1Database, env: Record<string, string | u
         try {
             const result = await runFiscalJobWorker(db);
             if (result.processed > 0) {
-                console.log(`[fiscal-worker] ${result.processed} job(s): ${result.succeeded} sucesso, ${result.failed} falha, ${result.deadLettered} dead-letter`);
+                logger.info('fiscal-worker.ciclo', { processed: result.processed, succeeded: result.succeeded, failed: result.failed, deadLettered: result.deadLettered });
             }
         } catch (err) {
-            console.error('[fiscal-worker] ciclo falhou', err);
+            logger.error('fiscal-worker.ciclo_falhou', { error: err });
         } finally {
             running = false;
         }

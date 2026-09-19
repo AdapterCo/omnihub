@@ -318,6 +318,9 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 
 | **Endurecimento de segurança** | **Concluído, com pendências** | Rate limit login/cadastro, scrypt assíncrono + limite de senha, IP confiável, cabeçalhos/CSP, Next 16.3.5 (0 vulnerabilidades). Pendentes: recuperação de senha, verificação de e-mail, 2FA (dependem de SMTP/decisão). 154 testes. |
 
+| **Operação: health check, logs, backup** | **Concluído, backup não testado com pg_dump real** | `/api/health`, logs JSON com requestId, backup diário com retenção + `restore-test.sh`. Rodar o teste de restauração na VPS e configurar cópia externa. |
+| **Correção de fuso horário (fiscal e relatórios)** | **Concluído** | `dhEmi`/`dhEvento` 3 h no futuro, AAMM da chave e relatório em UTC corrigidos via `lib/time.ts`; 5 testes de regressão. Ainda vale conferir contra a SEFAZ real. |
+
 ---
 
 ## Como Rodar e Verificar
@@ -332,6 +335,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **154 testes passando** (0 falhas).
+   *Resultado esperado:* **170 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).

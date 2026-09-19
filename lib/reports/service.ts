@@ -1,5 +1,6 @@
 import { requirePermission } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
+import { dayKey } from '../time.ts';
 
 // Fase 8 (§75: "relatórios"). Todos os relatórios são agregações somente-leitura sobre
 // dados já persistidos (sales/sale_payments/cash_sessions/cash_movements/
@@ -24,8 +25,9 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
     const storeFilter = input.storeId ? ' AND s.store_id = ?' : '';
     const storeArgs = input.storeId ? [input.storeId] : [];
 
-    // Agrupamento por dia feito em JS (UTC) porque a função de data do SQL difere entre
-    // SQLite (strftime) e PostgreSQL (to_char) — assim a mesma consulta roda nos dois.
+    // Agrupamento por dia feito em JS, no fuso do sistema (lib/time.ts), porque a função de
+    // data do SQL difere entre SQLite (strftime) e PostgreSQL (to_char) — assim a mesma
+    // consulta roda nos dois. Em UTC, vendas após as 21h de Brasília cairiam no dia seguinte.
     const saleRows = await db
         .prepare(
             `SELECT s.store_id AS storeId, s.store_name AS storeName, s.created_at AS createdAt, s.total AS total
@@ -37,7 +39,7 @@ export async function getSalesReport(db: D1Database, tenantId: string, actor: Ac
 
     const byDayStore = new Map<string, SalesReportPeriod>();
     for (const r of saleRows.results ?? []) {
-        const day = new Date(Number(r.createdAt)).toISOString().slice(0, 10);
+        const day = dayKey(Number(r.createdAt));
         const key = `${day}|${r.storeId}`;
         const entry = byDayStore.get(key) ?? { day, storeId: r.storeId, storeName: r.storeName, count: 0, total: 0 };
         entry.count += 1;

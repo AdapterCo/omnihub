@@ -10,6 +10,14 @@ services:
       DATABASE_URL: postgres://omnihub:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@db:5432/omnihub
       FISCAL_SECRET_KEY: ${FISCAL_SECRET_KEY:?defina FISCAL_SECRET_KEY (>=32 caracteres) no .env}
       FISCAL_WORKER_INTERVAL_MS: ${FISCAL_WORKER_INTERVAL_MS:-30000}
+    # Sem resposta saudável, o Docker marca o container como unhealthy e o Traefik para de
+    # roteá-lo. /api/health confere a conexão com o banco.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3017/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     networks:
       - omnihub_internal
       - traefik9
@@ -43,8 +51,33 @@ services:
     networks:
       - omnihub_internal
 
+  # Backup automático do banco (dump comprimido a cada BACKUP_INTERVAL_SECONDS, com retenção).
+  # Os dumps ficam no volume omnihub_backups, NO MESMO servidor: copie-os para fora da VPS
+  # (ver README, "Backup e restauração") — redundância de verdade exige cópia externa.
+  backup:
+    image: postgres:16-alpine
+    container_name: omnihub-backup
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: omnihub
+      PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      PGDATABASE: omnihub
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    entrypoint: ["sh", "/scripts/backup-loop.sh"]
+    volumes:
+      - omnihub_backups:/backups
+      - ./scripts/backup:/scripts:ro
+    networks:
+      - omnihub_internal
+
 volumes:
   omnihub_pgdata:
+  omnihub_backups:
 
 networks:
   omnihub_internal:

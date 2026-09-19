@@ -1,5 +1,6 @@
 import { RuleError } from '../errors.ts';
 import { generateAccessKey } from './keys.ts';
+import { isoWithOffset } from '../time.ts';
 import type { FiscalEnvironment, CRT } from './types.ts';
 
 export type NFeIssuer = {
@@ -130,8 +131,9 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     const cDV = accessKey.slice(-1);
     const crtCode = issuer.crt === '3_REGIME_NORMAL' ? '3' : issuer.crt === '2_SIMPLES_EXCESSO' ? '2' : '1';
 
-    // Formata data de emissão em ISO 8601 com offset de SP (-03:00)
-    const dhEmi = emissionDate.toISOString().replace(/\.\d{3}Z$/, '-03:00');
+    // dhEmi: hora LOCAL (America/Sao_Paulo) com o offset calculado. Trocar só o "Z" do UTC por
+    // "-03:00" gravaria a emissão 3 horas no futuro e a SEFAZ rejeitaria a nota.
+    const dhEmi = isoWithOffset(emissionDate.getTime());
     const natOp = escapeXml(input.natureOfOperation || 'VENDA DE MERCADORIA');
 
     let xml = `<?xml version="1.0" encoding="UTF-8"?>`;

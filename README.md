@@ -75,6 +75,16 @@ docker compose up -d --build
 
 O container roda `npm run db:migrate` antes de iniciar. O DNS de `omnihub.adapterco.com.br` precisa apontar para a VPS. Guarde a `FISCAL_SECRET_KEY`: sem ela, certificados A1/CSC já salvos ficam ilegíveis. O container ainda não foi construído/testado (o ambiente de desenvolvimento não tem Docker).
 
+### Backup, restauração, health check e logs
+
+- **Backup automático:** o serviço `backup` do `docker-compose.yml` roda `scripts/backup/backup.sh` logo após subir e depois a cada `BACKUP_INTERVAL_SECONDS` (padrão 24 h). Gera `pg_dump` comprimido no volume `omnihub_backups` (o dump inclui XMLs e eventos fiscais, que ficam no banco), valida que o arquivo é legível antes de publicá-lo e mantém `BACKUP_RETENTION_DAYS` dias (padrão 14), sem nunca apagar os 3 mais recentes. Falha de dump nunca apaga um backup bom.
+- **Teste de restauração** (faça na primeira vez e periodicamente — backup nunca testado não é confiável): `docker compose exec backup sh /scripts/restore-test.sh`. Restaura o dump mais recente num banco temporário, confere tabelas e contagens e apaga o temporário; não toca a produção. Termina com `OK: restauração validada`.
+- **Cópia fora da VPS (obrigatória para redundância real):** os dumps ficam no mesmo servidor. Copie-os para outro lugar, por exemplo: `docker cp omnihub-backup:/backups ./backups-$(date +%F)` e envie por `rsync`/`rclone`/armazenamento de objetos. Os dumps contêm hashes de senha e certificados criptografados: proteja o destino.
+- **Restaurar de verdade** (desastre): pare o app (`docker compose stop web`), crie um banco vazio e rode `docker compose exec backup pg_restore --no-owner --clean --if-exists --dbname=omnihub /backups/<arquivo>.dump`, depois `docker compose start web`. A `FISCAL_SECRET_KEY` precisa ser a mesma de antes, senão os certificados restaurados não abrem.
+- **Health check:** `GET /api/health` (público, sem detalhes internos) responde 200 se o banco responde e 503 se não. O `docker-compose.yml` o usa como `healthcheck` do app; sem resposta saudável o Traefik para de rotear.
+- **Logs estruturados:** uma linha JSON por evento (`docker compose logs web`), com `requestId`; segredos são mascarados, e-mail aparece só como `emailRef` (hash) e o `detail` do PostgreSQL nunca é registrado. `LOG_LEVEL=debug|info|warn|error` (padrão `info`). Quando a tela mostrar "(código xxxxxxxx)", procure esse código nos logs. Eventos úteis: `auth.login.falhou`, `auth.login.bloqueado`, `workspace.escrita.erro`, `fiscal-worker.ciclo_falhou`, `backup.*`.
+- **Fuso horário:** notas, chave de acesso, caixa e relatórios usam o horário de Brasília (`lib/time.ts`), independentemente do fuso do servidor.
+
 **Limitação registrada:** o adaptador `lib/db/pgAdapter.ts` e o schema `drizzle/0001_init.sql` seguem a sintaxe padrão do PostgreSQL, mas não foram executados contra um servidor Postgres real (o ambiente de desenvolvimento não tinha PostgreSQL). A primeira execução real de `npm run db:migrate` e do fluxo de cadastro/login na VPS é o teste de verdade.
 
 Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).

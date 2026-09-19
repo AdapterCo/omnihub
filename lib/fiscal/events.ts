@@ -1,6 +1,7 @@
 import { RuleError } from '../errors.ts';
 import type { FiscalEnvironment } from './types.ts';
 import { escapeXml } from './builder.ts';
+import { isoWithOffset } from '../time.ts';
 
 // Evento fiscal de Cancelamento (§29 de instrucoes.md: "Não executar DELETE. Registrar
 // FiscalDocument → FiscalEvent(CANCELLATION)"). Tipo de evento e estrutura seguem o
@@ -45,7 +46,8 @@ export function buildCancellationEventXml(input: BuildCancellationEventInput): {
     const seq = input.sequenceNumber ?? 1;
     const eventId = `ID${CANCELLATION_EVENT_TYPE}${input.accessKey}${String(seq).padStart(2, '0')}`;
     const tpAmb = input.environment === 'producao' ? '1' : '2';
-    const dhEvento = new Date().toISOString().replace(/\.\d{3}Z$/, '-03:00');
+    // Hora local com offset calculado (mesma correção do dhEmi em builder.ts).
+    const dhEvento = isoWithOffset(Date.now());
 
     const infEvento =
         `<infEvento Id="${eventId}">` +

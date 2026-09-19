@@ -16,6 +16,7 @@ import { buildDanfeHtml, buildDanfeNfceHtml } from '@/lib/fiscal/danfe';
 import { getSalesReport, getCashReport, getFiscalReport } from '@/lib/reports/service';
 import { getFiscalJobsSummary } from '@/lib/fiscal/queue';
 import { clientIp } from '@/lib/http/clientIp';
+import { logger } from '@/lib/log';
 import { withIdempotency } from '@/lib/idempotency';
 import { dispatchCommand } from '@/lib/relationalCommands';
 export const dynamic='force-dynamic';
@@ -96,7 +97,7 @@ export async function GET(request:Request){
   return reply(await snapshot(row,user.userId));
  }catch(error){
   if(error instanceof RuleError)return reply({error:error.message},error.status);
-  console.error('workspace.read failed',error);return reply({error:'Não foi possível carregar os dados. Tente novamente.'},503);
+  const requestId=crypto.randomUUID();logger.error('workspace.leitura.erro',{requestId,error});return reply({error:'Não foi possível carregar os dados. Tente novamente.',requestId},503);
  }
 }
 export async function POST(request:Request){
@@ -119,5 +120,5 @@ export async function POST(request:Request){
   await db.prepare('UPDATE accounts SET revision=revision+1 WHERE id=?').bind(row.id).run();
   row={...row,revision:row.revision+1};
   return reply({...(await snapshot(row,user.userId)),resultId});
- }catch(error){if(error instanceof RuleError)return reply({error:error.message},error.status);console.error('workspace.write failed',error);return reply({error:'Não foi possível salvar. Seus campos foram preservados; tente novamente.'},503)}
+ }catch(error){if(error instanceof RuleError)return reply({error:error.message},error.status);const requestId=crypto.randomUUID();logger.error('workspace.escrita.erro',{requestId,error});return reply({error:'Não foi possível salvar. Seus campos foram preservados; tente novamente.',requestId},503)}
 }

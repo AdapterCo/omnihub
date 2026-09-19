@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { RuleError } from '../errors.ts';
+import { localParts } from '../time.ts';
 import { requirePermission } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
 import {
@@ -1029,7 +1030,7 @@ export async function inutilizeFiscalNumbering(
     }
 
     const uf = store.uf.trim().toUpperCase();
-    const year = new Date(now).getFullYear();
+    const year = localParts(now).year;
 
     const { xml, infInutId } = buildInutilizacaoXml({
         environment: 'homologacao',

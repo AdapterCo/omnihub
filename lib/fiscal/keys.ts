@@ -1,4 +1,5 @@
 import { RuleError } from '../errors.ts';
+import { localParts } from '../time.ts';
 
 export const UF_IBGE_CODES: Record<string, string> = {
     RO: '11', AC: '12', AM: '13', RR: '14', PA: '15', AP: '16', TO: '17',
@@ -68,8 +69,11 @@ export function generateAccessKey(input: GenerateAccessKeyInput): { accessKey: s
         throw new RuleError('CNPJ do emitente deve conter exatamente 14 dígitos para composição da chave de acesso.', 400);
     }
 
-    const year = String(input.emissionDate.getFullYear()).slice(-2);
-    const month = String(input.emissionDate.getMonth() + 1).padStart(2, '0');
+    // AAMM no fuso do sistema (o mesmo de dhEmi): no servidor em UTC, uma nota emitida às 23h do
+    // último dia do mês teria o mês seguinte e a chave não bateria com a data de emissão.
+    const emission = localParts(input.emissionDate.getTime());
+    const year = String(emission.year).slice(-2);
+    const month = String(emission.month).padStart(2, '0');
     const aamm = `${year}${month}`;
 
     const mod = input.model;

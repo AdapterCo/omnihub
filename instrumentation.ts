@@ -5,5 +5,6 @@ export async function register() {
     if (!process.env.DATABASE_URL) return;
     const { database } = await import('./db/database');
     const { startFiscalWorker } = await import('./lib/fiscal/worker');
-    if (startFiscalWorker(database())) console.log('[fiscal-worker] iniciado');
+    const { logger } = await import('./lib/log');
+    if (startFiscalWorker(database())) logger.info('fiscal-worker.iniciado');
 }
