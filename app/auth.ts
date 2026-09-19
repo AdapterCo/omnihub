@@ -22,3 +22,15 @@ export function sessionCookieHeader(token: string, expiresAt: number, now = Date
 export function clearSessionCookieHeader(): string {
     return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }
+
+// Atrás de proxy reverso (Traefik) o Next enxerga http://host interno, enquanto o navegador
+// envia Origin https://dominio. Compara com o host/protocolo encaminhados pelo proxy também.
+export function isSameOrigin(request: Request): boolean {
+    const origin = request.headers.get('origin');
+    if (!origin) return false;
+    const url = new URL(request.url);
+    if (origin === url.origin) return true;
+    const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+    const proto = request.headers.get('x-forwarded-proto') ?? url.protocol.replace(':', '');
+    return !!host && origin === `${proto.split(',')[0].trim()}://${host.split(',')[0].trim()}`;
+}

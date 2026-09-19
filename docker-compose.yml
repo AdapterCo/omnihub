@@ -1,0 +1,53 @@
+services:
+  web:
+    build: .
+    container_name: omnihub-web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://omnihub:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@db:5432/omnihub
+      FISCAL_SECRET_KEY: ${FISCAL_SECRET_KEY:?defina FISCAL_SECRET_KEY (>=32 caracteres) no .env}
+      FISCAL_WORKER_INTERVAL_MS: ${FISCAL_WORKER_INTERVAL_MS:-30000}
+    networks:
+      - omnihub_internal
+      - traefik9
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik9"
+      - "traefik.http.routers.omnihub-web-http.rule=Host(`${DOMAIN:-omnihub.adapterco.com.br}`)"
+      - "traefik.http.routers.omnihub-web-http.entrypoints=http"
+      - "traefik.http.routers.omnihub-web-http.middlewares=https-redirect"
+      - "traefik.http.routers.omnihub-web.rule=Host(`${DOMAIN:-omnihub.adapterco.com.br}`)"
+      - "traefik.http.routers.omnihub-web.entrypoints=https"
+      - "traefik.http.routers.omnihub-web.tls=true"
+      - "traefik.http.routers.omnihub-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.omnihub-web.loadbalancer.server.port=3000"
+
+  db:
+    image: postgres:16-alpine
+    container_name: omnihub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: omnihub
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: omnihub
+    volumes:
+      - omnihub_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnihub -d omnihub"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - omnihub_internal
+
+volumes:
+  omnihub_pgdata:
+
+networks:
+  omnihub_internal:
+    driver: bridge
+  traefik9:
+    external: true

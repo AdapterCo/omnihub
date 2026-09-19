@@ -312,6 +312,8 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Fase 8 — Fila fiscal assíncrona (§41)** | **Concluído, com ressalva** | Fila em D1 (não Cloudflare Queues); retry/backoff/dead-letter/idempotência testados. Sem Cron Trigger real — só roda sob chamada manual/externa. UI: botão "Processar fila agora" + observabilidade; falta UI para reenfileirar 1 venda específica. |
 | **Fase 8 — UI (Relatórios + Fila)** | **Concluído, não testado com login real** | Aba "Relatórios" com 4 painéis em `app/workspace.tsx`. Compilação e render sem erros verificados no navegador; fluxo autenticado não pôde ser clicado por falta de OAuth do ChatGPT neste sandbox. **Fase 8 concluída com esta entrega.** |
 
+| **Deploy Docker + Traefik** | **Configurado, não testado** | `Dockerfile`, `docker-compose.yml` (app + Postgres 16, rede externa `traefik9`, `omnihub.adapterco.com.br`, roteadores http→https e https com `letsencrypt`, porta 3000), `.env.example`. `isSameOrigin` aceita `x-forwarded-*` (senão 403 atrás do proxy). Sem Docker no ambiente de desenvolvimento: build da imagem e subida ainda não executados. |
+
 ---
 
 ## Como Rodar e Verificar

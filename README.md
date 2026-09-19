@@ -64,6 +64,17 @@ Verificação: `npx tsc --noEmit` e `npm test` (`node --test tests/*.test.ts`; o
 
 **Ao criar tabela/coluna:** adicionar uma nova migração em `drizzle/` (PostgreSQL) e o equivalente em `tests/helpers/sqlite-migrations/`; nunca alterar migração já aplicada.
 
+### Deploy com Docker + Traefik (omnihub.adapterco.com.br)
+
+`Dockerfile` + `docker-compose.yml` sobem o app (Next.js) e um PostgreSQL 16 dedicado. O app entra na rede externa `traefik9` (a mesma dos demais projetos da VPS) com roteadores HTTP→HTTPS (`https-redirect`) e HTTPS com `certresolver=letsencrypt`; o banco fica só na rede interna `omnihub_internal`, sem porta publicada. Porta interna do app: 3000.
+
+```
+cp .env.example .env   # preencher POSTGRES_PASSWORD e FISCAL_SECRET_KEY (DOMAIN já tem o padrão omnihub.adapterco.com.br)
+docker compose up -d --build
+```
+
+O container roda `npm run db:migrate` antes de iniciar. O DNS de `omnihub.adapterco.com.br` precisa apontar para a VPS. Guarde a `FISCAL_SECRET_KEY`: sem ela, certificados A1/CSC já salvos ficam ilegíveis. O container ainda não foi construído/testado (o ambiente de desenvolvimento não tem Docker).
+
 **Limitação registrada:** o adaptador `lib/db/pgAdapter.ts` e o schema `drizzle/0001_init.sql` seguem a sintaxe padrão do PostgreSQL, mas não foram executados contra um servidor Postgres real (o ambiente de desenvolvimento não tinha PostgreSQL). A primeira execução real de `npm run db:migrate` e do fluxo de cadastro/login na VPS é o teste de verdade.
 
 Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).

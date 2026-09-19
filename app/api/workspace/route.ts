@@ -1,4 +1,4 @@
-import { getCurrentUser } from '@/app/auth';
+import { getCurrentUser, isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, type Actor } from '@/lib/domain';
 import { commandSchema } from '@/lib/commands';
@@ -99,7 +99,7 @@ export async function GET(request:Request){
 }
 export async function POST(request:Request){
  try{
-  const origin=request.headers.get('origin');if(!origin||origin!==new URL(request.url).origin)return reply({error:'Origem da solicitação inválida.'},403);
+  if(!isSameOrigin(request))return reply({error:'Origem da solicitação inválida.'},403);
   const user=await getCurrentUser();if(!user)return reply({error:'Sessão encerrada. Entre novamente.',signIn:true},401);
   if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'Formato inválido.'},415);
   const raw=await request.text();if(raw.length>262144)return reply({error:'Solicitação muito grande.'},413);let body;try{body=JSON.parse(raw)}catch{return reply({error:'Solicitação inválida.'},400)}

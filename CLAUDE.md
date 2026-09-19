@@ -57,6 +57,8 @@ Mocks só são permitidos em testes automatizados, e sempre identificados explic
   - **Deploy:** ver `README.md` ("Desenvolvimento e deploy (VPS)"): `DATABASE_URL` + `FISCAL_SECRET_KEY`, `npm run db:migrate`, `npm run build`, `npm run start`, systemd/PM2 + proxy HTTPS.
   - **Limitações registradas:** (1) `pgAdapter.ts` e `0001_init.sql` **não foram executados contra um PostgreSQL real** (sandbox sem Postgres) — testar `db:migrate` e cadastro/login na VPS antes de confiar; (2) sem recuperação de senha, verificação de e-mail, 2FA (§48) nem limite de tentativas de login; (3) ~~fila fiscal só manual~~ **resolvido:** worker automático em processo (`lib/fiscal/worker.ts` + `instrumentation.ts`, intervalo `FISCAL_WORKER_INTERVAL_MS`, padrão 30 s, `0` desliga); recupera jobs presos em `PROCESSING` há >10 min; transmissão síncrona que falha por rede (doc `SIGNED`) enfileira retry sozinha. O botão "Processar fila agora" continua existindo. 147/147 testes.
 
+- **Deploy Docker/Traefik configurado (não testado):** `Dockerfile`, `docker-compose.yml` (app + Postgres 16, rede externa `traefik9`, domínio `omnihub.adapterco.com.br`, labels no padrão dos outros projetos da VPS, migração automática na subida), `.env.example`, `.dockerignore`. A checagem de origem das rotas (`isSameOrigin` em `app/auth.ts`) agora aceita `x-forwarded-host/proto`, senão o login daria 403 atrás do Traefik. Detalhes no README.
+
 Próxima fase: Fase 9/expansão futura, a definir com o usuário. NFS-e fica para o futuro (§40 de `instrucoes.md`).
 
 ## Como verificar antes de considerar algo pronto

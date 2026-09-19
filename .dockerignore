@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.claude
+.kilo
+dist
+outputs
+docs
+tests
+*.tsbuildinfo
+.env*
+Dockerfile
+docker-compose.yml
