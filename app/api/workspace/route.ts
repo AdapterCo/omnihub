@@ -85,6 +85,7 @@ export async function GET(request:Request){
    const storeId=params.get('storeId')||undefined;
    const from=params.get('from')?Number(params.get('from')):undefined;
    const to=params.get('to')?Number(params.get('to')):undefined;
+   if((from!==undefined&&!Number.isFinite(from))||(to!==undefined&&!Number.isFinite(to)))return reply({error:'Período inválido: from e to devem ser timestamps em milissegundos.'},400);
    if(reportType==='sales')return reply(await getSalesReport(db,row.id,actor,{storeId,from,to}));
    if(reportType==='cash')return reply(await getCashReport(db,row.id,actor,{storeId}));
    if(reportType==='fiscal')return reply(await getFiscalReport(db,row.id,actor));

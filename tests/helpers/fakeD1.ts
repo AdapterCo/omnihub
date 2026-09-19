@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createPgTestDb } from './pgTestDb.ts';
 
 /**
  * Banco SQLite real (node:sqlite) por trás de um adaptador que expõe o subconjunto da
@@ -36,6 +37,8 @@ function wrapStatement(raw: ReturnType<DatabaseSync['prepare']>, args: unknown[]
 }
 
 export function createFakeD1() {
+    // Modo opcional: PostgreSQL real (ver pgTestDb.ts). Padrão continua sendo o SQLite em memória.
+    if (process.env.TEST_DATABASE_URL) return createPgTestDb(process.env.TEST_DATABASE_URL, ['0001_init.sql']);
     const sqlite = new DatabaseSync(':memory:');
     sqlite.exec('PRAGMA foreign_keys = ON;');
     for (const file of MIGRATIONS) {

@@ -441,3 +441,22 @@ Cada fase é reversível e não remove funcionalidade existente antes de a subst
 - Segredos (`POSTGRES_PASSWORD`, `FISCAL_SECRET_KEY`) obrigatórios via `.env` (compose falha sem eles); `.env.example` versionado sem valores.
 - Risco tratado: atrás do Traefik o Next vê `http://` interno enquanto o navegador envia `Origin: https://...`; a checagem anti-CSRF (`isSameOrigin`, `app/auth.ts`) compara também com `x-forwarded-host/proto`.
 - Não validado: build da imagem e subida real (sem Docker no ambiente de desenvolvimento). Imagem mantém `node_modules` completo porque o Next precisa de TypeScript para ler `next.config.ts`.
+
+
+## Auditoria pós-deploy em PostgreSQL real (2026-09-18)
+
+**Método:** PostgreSQL 16 real (embedded, UTF-8) + `npm run db:migrate` + app em produção (`next start`) + fluxo HTTP completo + suíte inteira via `TEST_DATABASE_URL`.
+
+**Bugs encontrados e corrigidos**
+1. **Apelidos camelCase (crítico):** Postgres faz case-folding de identificadores sem aspas → `row.userId` `undefined` em ~190 consultas. Sintomas: cadastro "funcionava" mas a conta não era achada (401 → volta ao login sem mensagem) e login sempre falhava (`passwordHash` `undefined`). Correção central no adaptador.
+2. **Pool sem handler de erro:** queda/restart do PostgreSQL derrubaria o processo. Corrigido (+ `DATABASE_POOL_MAX`).
+3. **`?report=sales&from=abc`:** virava 503 (`bigint "NaN"`); agora 400.
+4. **`pgAdapter.ts` com parameter properties:** incompatível com o Node em modo strip-only (testes); reescrito.
+
+**Melhorias pendentes (não implementadas)**
+- Segurança: rate limit/bloqueio de login e cadastro; limite de tamanho de senha (scrypt síncrono bloqueia o event loop e é vetor de DoS — usar `scrypt` assíncrono); cadastro aberto ao mundo (avaliar convite/captcha/verificação de e-mail); recuperação de senha; 2FA (§48); limpeza periódica de `sessions` expiradas; IP de auditoria vem de `cf-connecting-ip`/`x-forwarded-for` (forjável — confiar só no proxy); cabeçalhos de segurança (CSP, HSTS, X-Frame-Options, Referrer-Policy) no Traefik ou `next.config.ts`.
+- Dependências (`npm audit --omit=dev`): `next` (crítico, bypass de middleware/proxy com Turbopack — o projeto não usa middleware, exposição baixa; corrigido em next@16.3.5), `postcss`/`sharp` (via next), `nanoid`, `baseline-browser-mapping`. Atualizar o Next e reexecutar build/testes.
+- Operação: `healthcheck` do serviço `web` no compose; backup do volume `omnihub_pgdata` (pg_dump agendado); logs estruturados; migração roda a cada subida do container (ok para 1 réplica); `.env` com segredos fora do repositório.
+- Código: `app/workspace.tsx` é um arquivo monolítico de linhas gigantes (manutenção difícil); `npm run lint` acusa 5 erros no arquivo (setState em effect, `Date.now()` no render, aspas sem escape) e ~3300 avisos (a maioria em `dist/`/`outputs/` — restringir o lint às pastas do código); alguns `catch` silenciosos na UI de relatórios.
+- Banco: `ROLLBACK` que falha em `batch()` mascara o erro original; e-mail duplicado em cadastros simultâneos vira 503 genérico (índice único protege, mas a mensagem devia ser 409); `toPositionalSql` troca todo `?` (quebraria com `?` dentro de literal de texto no SQL).
+- Relato do usuário "o navegador fecha sozinho": não há `window.close`/reload no código; não reproduzido. Investigar se persistir após o deploy (extensão/Brave/aba).

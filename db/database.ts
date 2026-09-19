@@ -16,7 +16,10 @@ export function database(): D1Database {
         );
     }
     if (!pool) {
-        pool = new Pool({ connectionString });
+        pool = new Pool({ connectionString, max: Number(process.env.DATABASE_POOL_MAX) || 10 });
+        // Sem este handler, um restart/queda do PostgreSQL emite 'error' num cliente ocioso e
+        // derruba o processo Node inteiro (exceção não tratada).
+        pool.on('error', (error) => console.error('[db] erro em conexão ociosa do pool', error.message));
     }
     if (!adapter) {
         adapter = createPostgresD1Adapter(pool);

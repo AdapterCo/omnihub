@@ -30,14 +30,39 @@ function toPositionalSql(sql: string): string {
     return sql.replace(/\?/g, () => `$${++index}`);
 }
 
+// PostgreSQL converte identificadores sem aspas para minúsculas: `SELECT user_id AS userId`
+// volta como `userid`. O SQLite preservava a caixa, e todo o código de negócio lê chaves
+// camelCase (row.userId). Em vez de reescrever ~190 apelidos, o adaptador lê os `AS alias`
+// do próprio SQL e devolve as colunas com a caixa original.
+export function aliasCaseMap(sql: string): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const match of sql.matchAll(/\bAS\s+([A-Za-z_][A-Za-z0-9_]*)/gi)) {
+        const alias = match[1];
+        if (alias !== alias.toLowerCase()) map.set(alias.toLowerCase(), alias);
+    }
+    return map;
+}
+
+export function restoreAliasCase<T>(row: T, map: Map<string, string>): T {
+    if (!map.size || row === null || typeof row !== 'object') return row;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(row as Record<string, unknown>)) out[map.get(key) ?? key] = value;
+    return out as T;
+}
+
 type Executor = { query(text: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }> };
 
 class PgPreparedStatement implements D1PreparedStatement {
-    constructor(
-        private readonly executor: Executor,
-        private readonly sql: string,
-        private readonly args: unknown[] = [],
-    ) {}
+    private readonly executor: Executor;
+    private readonly sql: string;
+    private readonly args: unknown[];
+
+    // Sem "parameter properties": o Node (strip-only) que roda os testes não as aceita.
+    constructor(executor: Executor, sql: string, args: unknown[] = []) {
+        this.executor = executor;
+        this.sql = sql;
+        this.args = args;
+    }
 
     bind(...values: unknown[]): D1PreparedStatement {
         return new PgPreparedStatement(this.executor, this.sql, values);
@@ -45,12 +70,14 @@ class PgPreparedStatement implements D1PreparedStatement {
 
     async first<T = unknown>(): Promise<T | null> {
         const result = await this.executor.query(toPositionalSql(this.sql), this.args);
-        return (result.rows[0] as T) ?? null;
+        const row = result.rows[0] as T | undefined;
+        return row === undefined ? null : restoreAliasCase(row, aliasCaseMap(this.sql));
     }
 
     async all<T = unknown>(): Promise<D1Result<T>> {
         const result = await this.executor.query(toPositionalSql(this.sql), this.args);
-        return { results: result.rows as T[] };
+        const map = aliasCaseMap(this.sql);
+        return { results: result.rows.map((row) => restoreAliasCase(row as T, map)) };
     }
 
     async run(): Promise<D1RunResult> {

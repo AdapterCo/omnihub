@@ -314,6 +314,8 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 
 | **Deploy Docker + Traefik** | **Configurado, não testado** | `Dockerfile`, `docker-compose.yml` (app + Postgres 16, rede externa `traefik9`, `omnihub.adapterco.com.br`, roteadores http→https e https com `letsencrypt`, porta 3017), `.env.example`. `isSameOrigin` aceita `x-forwarded-*` (senão 403 atrás do proxy). Sem Docker no ambiente de desenvolvimento: build da imagem e subida ainda não executados. |
 
+| **Correção pós-deploy (PostgreSQL real)** | **Concluído** | Apelidos camelCase vs minúsculas do Postgres (adaptador corrigido), handler de erro do pool, validação de período nos relatórios, modo de teste `TEST_DATABASE_URL`. Suíte 147/147 em SQLite e em PostgreSQL. Ver lista de melhorias pendentes em `docs/analise-inicial.md`. |
+
 ---
 
 ## Como Rodar e Verificar
