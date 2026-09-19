@@ -437,7 +437,7 @@ Cada fase é reversível e não remove funcionalidade existente antes de a subst
 
 ## Deploy Docker + Traefik (omnihub.adapterco.com.br)
 
-- `docker-compose.yml`: serviço `web` (build do `Dockerfile`, porta interna 3000, redes `omnihub_internal` + `traefik9` externa) e `db` (postgres:16-alpine, volume `omnihub_pgdata`, só rede interna). Labels Traefik no padrão dos demais projetos da VPS (`https-redirect`, `certresolver=letsencrypt`, `traefik.docker.network=traefik9`), roteadores `omnihub-web(-http)`.
+- `docker-compose.yml`: serviço `web` (build do `Dockerfile`, porta interna 3017, redes `omnihub_internal` + `traefik9` externa) e `db` (postgres:16-alpine, volume `omnihub_pgdata`, só rede interna). Labels Traefik no padrão dos demais projetos da VPS (`https-redirect`, `certresolver=letsencrypt`, `traefik.docker.network=traefik9`), roteadores `omnihub-web(-http)`.
 - Segredos (`POSTGRES_PASSWORD`, `FISCAL_SECRET_KEY`) obrigatórios via `.env` (compose falha sem eles); `.env.example` versionado sem valores.
 - Risco tratado: atrás do Traefik o Next vê `http://` interno enquanto o navegador envia `Origin: https://...`; a checagem anti-CSRF (`isSameOrigin`, `app/auth.ts`) compara também com `x-forwarded-host/proto`.
 - Não validado: build da imagem e subida real (sem Docker no ambiente de desenvolvimento). Imagem mantém `node_modules` completo porque o Next precisa de TypeScript para ler `next.config.ts`.

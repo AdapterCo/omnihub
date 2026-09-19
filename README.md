@@ -66,7 +66,7 @@ Verificação: `npx tsc --noEmit` e `npm test` (`node --test tests/*.test.ts`; o
 
 ### Deploy com Docker + Traefik (omnihub.adapterco.com.br)
 
-`Dockerfile` + `docker-compose.yml` sobem o app (Next.js) e um PostgreSQL 16 dedicado. O app entra na rede externa `traefik9` (a mesma dos demais projetos da VPS) com roteadores HTTP→HTTPS (`https-redirect`) e HTTPS com `certresolver=letsencrypt`; o banco fica só na rede interna `omnihub_internal`, sem porta publicada. Porta interna do app: 3000.
+`Dockerfile` + `docker-compose.yml` sobem o app (Next.js) e um PostgreSQL 16 dedicado. O app entra na rede externa `traefik9` (a mesma dos demais projetos da VPS) com roteadores HTTP→HTTPS (`https-redirect`) e HTTPS com `certresolver=letsencrypt`; o banco fica só na rede interna `omnihub_internal`, sem porta publicada. Porta interna do app: 3017.
 
 ```
 cp .env.example .env   # preencher POSTGRES_PASSWORD e FISCAL_SECRET_KEY (DOMAIN já tem o padrão omnihub.adapterco.com.br)
