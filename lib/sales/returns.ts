@@ -49,6 +49,13 @@ export async function returnSale(
     requireStoreAccess(actor, sale.store_id);
     if (sale.status === 'CANCELLED') throw new RuleError('Venda cancelada não pode receber devolução.', 409);
     if (sale.status === 'REFUNDED') throw new RuleError('Todos os itens desta venda já foram devolvidos.', 409);
+    if (sale.status === 'PENDING_PAYMENT') throw new RuleError('Venda aguardando pagamento não pode receber devolução.', 409);
+    // Pagamento integrado (Mercado Pago presencial) só aceita estorno TOTAL no provedor: devolução
+    // parcial registraria um estorno que o provedor não faz. Use o cancelamento da venda.
+    const integrated = await db.prepare('SELECT status FROM payment_charges WHERE sale_id = ? AND tenant_id = ?').bind(params.saleId, tenantId).first<{ status: string }>();
+    if (integrated) {
+        throw new RuleError('Venda paga por pagamento integrado: o provedor só faz estorno total. Use "Cancelar venda" (o estorno no provedor é feito automaticamente); devolução parcial ainda não é suportada nesse caso.', 409);
+    }
 
     // §54 x §29: enquanto houver documento fiscal ativo, a devolução comercial deixaria a
     // nota emitida sem lastro. Nota de devolução (finNFe=4) ainda não está implementada.

@@ -149,6 +149,34 @@ export const fiscalCommandSchema = z.discriminatedUnion('type', [
 ]);
 export type FiscalCommand = z.infer<typeof fiscalCommandSchema>;
 
-export const commandSchema = z.union([relationalCommandSchema, cashCommandSchema, saleCommandSchema, userCommandSchema, customerCommandSchema, supplierCommandSchema, fiscalCommandSchema]);
+// Pagamentos integrados (Mercado Pago presencial). Segredos só entram em payment.config.save;
+// campos vazios mantêm o valor já salvo. A cobrança recebe o carrinho (não um valor): o total é
+// calculado no servidor pelas mesmas regras da venda.
+export const paymentCommandSchema = z.discriminatedUnion('type', [
+    z.object({
+        type: z.literal('payment.config.save'),
+        storeId: identifier,
+        accessToken: z.string().trim().max(300).optional(),
+        webhookSecret: z.string().trim().max(300).optional(),
+        qrExternalPosId: z.string().trim().max(64),
+        defaultTerminalId: z.string().trim().max(120),
+    }).strict(),
+    z.object({
+        type: z.literal('payment.charge.start'),
+        storeId: identifier,
+        items: z.array(z.object({ productId: identifier, qty })).min(1).max(100),
+        customer: short,
+        document: z.string().regex(/^(\d{11}|\d{14})?$/),
+        discount: z.object({ percent: z.number().gt(0).lt(100).optional(), amount: z.number().int().min(1).max(100000000).optional(), reason: short.min(3) }).strict().optional(),
+        authorization: z.object({ email: z.string().trim().max(160), password: z.string().min(1).max(128) }).strict().optional(),
+        method: z.enum(['PIX_QR', 'CARD_TERMINAL']),
+        terminalId: z.string().trim().max(120).optional(),
+    }).strict(),
+    z.object({ type: z.literal('payment.charge.cancel'), chargeId: identifier }).strict(),
+    z.object({ type: z.literal('payment.charge.resolve'), chargeId: identifier, outcome: z.enum(['PAID', 'NOT_PAID']), note: short.min(10) }).strict(),
+]);
+export type PaymentCommand = z.infer<typeof paymentCommandSchema>;
+
+export const commandSchema = z.union([relationalCommandSchema, cashCommandSchema, saleCommandSchema, userCommandSchema, customerCommandSchema, supplierCommandSchema, fiscalCommandSchema, paymentCommandSchema]);
 export type Command = z.infer<typeof commandSchema>;
 

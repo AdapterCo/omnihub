@@ -391,6 +391,9 @@ export async function generateNFeForSale(
     if (sale.status === 'CANCELLED') {
         throw new RuleError('Não é possível emitir NF-e para uma venda cancelada.', 400);
     }
+    if (sale.status === 'PENDING_PAYMENT') {
+        throw new RuleError('Venda aguardando confirmação do pagamento integrado: a emissão fiscal só é liberada depois de paga.', 409);
+    }
     // §54: venda com devolução não pode gerar documento fiscal pelo valor original (a nota de
     // devolução ainda não existe) — bloqueia em vez de emitir um valor que não reflete a venda.
     if (sale.status === 'REFUNDED' || Number(sale.returnedTotal) > 0) {

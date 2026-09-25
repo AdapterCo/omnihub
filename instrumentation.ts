@@ -7,4 +7,7 @@ export async function register() {
     const { startFiscalWorker } = await import('./lib/fiscal/worker');
     const { logger } = await import('./lib/log');
     if (startFiscalWorker(database())) logger.info('fiscal-worker.iniciado');
+    // Reconciliação de cobranças integradas (Mercado Pago) abertas.
+    const { startPaymentWorker } = await import('./lib/payments/worker');
+    if (startPaymentWorker(database())) logger.info('payment-worker.iniciado');
 }

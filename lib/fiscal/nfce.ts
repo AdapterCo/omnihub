@@ -176,6 +176,9 @@ export async function generateNFCeForSale(
     if (sale.status === 'CANCELLED') {
         throw new RuleError('Não é possível emitir NFC-e para uma venda cancelada.', 400);
     }
+    if (sale.status === 'PENDING_PAYMENT') {
+        throw new RuleError('Venda aguardando confirmação do pagamento integrado: a emissão fiscal só é liberada depois de paga.', 409);
+    }
     // §54: venda com devolução não gera documento fiscal pelo valor original (ver service.ts).
     if (sale.status === 'REFUNDED' || Number(sale.returnedTotal) > 0) {
         throw new RuleError('Esta venda possui devolução registrada; a emissão fiscal pelo valor original está bloqueada.', 409);

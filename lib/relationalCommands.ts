@@ -7,6 +7,7 @@ import { openSession, closeSession, recordMovement } from './cash/service.ts';
 import { createSale, printSale, cancelSale } from './sales/service.ts';
 import { returnSale } from './sales/returns.ts';
 import { listDiscountLimits, saveDiscountLimits } from './sales/discount.ts';
+import { savePaymentConfig, startCharge, cancelCharge, resolveCharge, cancelSaleWithRefund, type PaymentDeps } from './payments/service.ts';
 import { recordAudit } from './audit/service.ts';
 import { assignTenantUser, removeTenantUser } from './users/service.ts';
 import { createCustomer, updateCustomer, createSupplier, updateSupplier } from './customers/service.ts';
@@ -24,7 +25,7 @@ import { requirePermission } from './authz/service.ts';
 // recebimento de transferência.
 const ACTIVE_EXEMPT = new Set(['transfer.receive', 'cash.close', 'sale.print']);
 
-export type DispatchContext = { ip?: string | null; correlationId?: string | null };
+export type DispatchContext = { ip?: string | null; correlationId?: string | null; payments?: PaymentDeps };
 
 export async function dispatchCommand(db: D1Database, tenantId: string, actor: Actor, plan: Entitlement, command: Command, now = Date.now(), context: DispatchContext = {}): Promise<string | undefined> {
     if (!ACTIVE_EXEMPT.has(command.type)) requireActive(plan, now);
@@ -148,6 +149,27 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         });
         return id;
     }
+    if (command.type === 'payment.config.save') {
+        const summary = await savePaymentConfig(db, tenantId, command.storeId, command, actor, now);
+        // Nunca grava token/segredo na auditoria: só o que mudou de configuração pública.
+        await audit({ storeId: command.storeId, description: 'Pagamentos integrados (Mercado Pago) configurados', entity: 'payment_config', entityId: command.storeId, after: { qrExternalPosId: summary.qrExternalPosId, defaultTerminalId: summary.defaultTerminalId, tokenAlterado: !!command.accessToken, segredoWebhookAlterado: !!command.webhookSecret } });
+        return command.storeId;
+    }
+    if (command.type === 'payment.charge.start') {
+        const view = await startCharge(db, tenantId, command, actor, now, context.payments);
+        await audit({ storeId: command.storeId, description: `Cobrança ${command.method === 'PIX_QR' ? 'Pix (QR)' : 'na maquininha'} da venda ${view.saleId.slice(0, 8)}`, entity: 'payment_charge', entityId: view.id, after: { saleId: view.saleId, method: view.method, amount: view.amount, items: command.items, discount: command.discount ? { ...command.discount } : undefined } });
+        return view.id;
+    }
+    if (command.type === 'payment.charge.cancel') {
+        const view = await cancelCharge(db, tenantId, command.chargeId, actor, now, context.payments);
+        await audit({ description: `Cancelamento da cobrança ${command.chargeId.slice(0, 8)} (${view.status})`, entity: 'payment_charge', entityId: command.chargeId, after: { status: view.status } });
+        return view.id;
+    }
+    if (command.type === 'payment.charge.resolve') {
+        const view = await resolveCharge(db, tenantId, command.chargeId, command.outcome, command.note, actor, now, context.payments);
+        await audit({ description: `Resolução manual da cobrança ${command.chargeId.slice(0, 8)}: ${command.outcome} — ${command.note}`, entity: 'payment_charge', entityId: command.chargeId, after: { outcome: command.outcome, status: view.status, note: command.note } });
+        return view.id;
+    }
     if (command.type === 'discount.limits.save') {
         const before = await listDiscountLimits(db, tenantId, actor);
         const after = await saveDiscountLimits(db, tenantId, command.limits, actor, now);
@@ -159,7 +181,9 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         return command.id;
     }
     if (command.type === 'sale.cancel') {
-        await cancelSale(db, tenantId, command.id, actor, now);
+        // Venda paga por pagamento integrado: estorna no provedor antes de cancelar.
+        const refunded = await cancelSaleWithRefund(db, tenantId, command.id, actor, now, context.payments);
+        if (!refunded) await cancelSale(db, tenantId, command.id, actor, now);
         await audit({ description: `Cancelamento de venda ${command.id.slice(0, 8)}: ${command.reason}`, entity: 'sale', entityId: command.id, after: { reason: command.reason } });
         return command.id;
     }

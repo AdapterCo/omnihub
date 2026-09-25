@@ -23,6 +23,9 @@ export async function createSale(
  params: { storeId: string; items: { productId: string; qty: number }[]; customer: string; document: string; payment?: string; payments?: PaymentLine[]; discount?: DiscountRequest; authorization?: SupervisorAuthorization },
  actor: Actor,
  now = Date.now(),
+ // Pagamento integrado (lib/payments): a venda nasce PENDING_PAYMENT (§17) com o estoque já
+ // reservado e só vira COMPLETED quando o provedor confirma o pagamento.
+ options: { pendingPayment?: boolean } = {},
 ): Promise<string> {
  requirePermission(actor.permissions, 'SALE_CREATE');
  const store = await getStore(db, tenantId, params.storeId);
@@ -66,7 +69,7 @@ export async function createSale(
  const insertStatements = [
   db
    .prepare('INSERT INTO sales (id, tenant_id, store_id, store_name, store_cnpj, cash_session_id, user_id, operator, customer, document, status, total, print_count, created_at, discount, discount_reason, discount_granted_by, discount_authorized_by, discount_authorized_by_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)')
-   .bind(id, tenantId, store.id, store.name, store.cnpj, session.id, actor.userId, actor.displayName, params.customer, params.document, 'COMPLETED', total, now, discount, discount ? (params.discount?.reason ?? '').trim() : '', discount ? actor.userId : null, authorizedBy?.userId ?? null, authorizedBy?.name ?? ''),
+   .bind(id, tenantId, store.id, store.name, store.cnpj, session.id, actor.userId, actor.displayName, params.customer, params.document, options.pendingPayment ? 'PENDING_PAYMENT' : 'COMPLETED', total, now, discount, discount ? (params.discount?.reason ?? '').trim() : '', discount ? actor.userId : null, authorizedBy?.userId ?? null, authorizedBy?.name ?? ''),
   db.prepare('INSERT INTO non_fiscal_receipts (id, sale_id, created_at) VALUES (?,?,?)').bind(crypto.randomUUID(), id, now),
   ...items.map((item, index) => db.prepare('INSERT INTO sale_items (id, sale_id, product_id, name, sku, qty, price, discount) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), id, item.productId, item.name, item.sku, item.qty, item.price, itemDiscounts[index])),
   ...payments.map((payment) => db.prepare('INSERT INTO sale_payments (id, sale_id, method, amount) VALUES (?,?,?,?)').bind(crypto.randomUUID(), id, payment.method, payment.amount)),
@@ -96,11 +99,22 @@ export async function printSale(db: D1Database, tenantId: string, id: string, ac
  await db.prepare('UPDATE sales SET print_count = print_count + 1 WHERE id = ?').bind(id).run();
 }
 
-export async function cancelSale(db: D1Database, tenantId: string, id: string, actor: Actor, now = Date.now()): Promise<void> {
+export async function cancelSale(db: D1Database, tenantId: string, id: string, actor: Actor, now = Date.now(), options: { providerRefunded?: boolean } = {}): Promise<void> {
  requirePermission(actor.permissions, 'SALE_CANCEL');
  const sale = await loadSale(db, tenantId, id);
  requireStoreAccess(actor, sale.store_id);
  if (sale.status === 'CANCELLED') throw new RuleError('Venda já cancelada.', 409);
+ // Pagamento integrado: cobrança em aberto se resolve pelo fluxo de pagamento (cancelar a
+ // cobrança devolve o estoque); cobrança paga só permite cancelar a venda depois do estorno
+ // confirmado pelo provedor (lib/payments/service.ts faz o estorno e chama esta função).
+ const charge = await db.prepare('SELECT status FROM payment_charges WHERE sale_id = ? AND tenant_id = ?').bind(id, tenantId).first<{ status: string }>();
+ if (charge && ['CREATING', 'PENDING', 'ACTION_REQUIRED'].includes(charge.status)) {
+  throw new RuleError('Esta venda tem uma cobrança integrada em andamento. Cancele a cobrança (o estoque volta automaticamente).', 409);
+ }
+ if (charge && charge.status === 'PAID' && !options.providerRefunded) {
+  throw new RuleError('Esta venda foi paga por pagamento integrado. O cancelamento precisa estornar o pagamento no provedor primeiro.', 409);
+ }
+ if (sale.status === 'PENDING_PAYMENT') throw new RuleError('Venda aguardando pagamento: cancele a cobrança integrada.', 409);
  // §54: cancelamento (venda inteira, antes de qualquer devolução) e devolução são fluxos
  // diferentes. Cancelar uma venda que já teve itens devolvidos devolveria o estoque duas
  // vezes e estornaria o dinheiro duas vezes.

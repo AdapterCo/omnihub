@@ -85,6 +85,16 @@ O container roda `npm run db:migrate` antes de iniciar. O DNS de `omnihub.adapte
 - **Logs estruturados:** uma linha JSON por evento (`docker compose logs web`), com `requestId`; segredos são mascarados, e-mail aparece só como `emailRef` (hash) e o `detail` do PostgreSQL nunca é registrado. `LOG_LEVEL=debug|info|warn|error` (padrão `info`). Quando a tela mostrar "(código xxxxxxxx)", procure esse código nos logs. Eventos úteis: `auth.login.falhou`, `auth.login.bloqueado`, `workspace.escrita.erro`, `fiscal-worker.ciclo_falhou`, `backup.*`.
 - **Fuso horário:** notas, chave de acesso, caixa e relatórios usam o horário de Brasília (`lib/time.ts`), independentemente do fuso do servidor.
 
+### Pagamentos integrados no PDV (Mercado Pago)
+
+- **Pix no balcão:** QR Code presencial dinâmico do Mercado Pago (`POST /v1/orders`, `type: "qr"`). Não pede e-mail nem CPF do cliente. Exige um **caixa** cadastrado na conta Mercado Pago da loja; o `external_id` desse caixa vai no campo "Caixa do Mercado Pago" em **Minhas lojas > Pagamentos integrados**.
+- **Maquininha:** Mercado Pago Point (`type: "point"`), terminal em **modo PDV**. O botão "Listar maquininhas da conta" mostra os terminais e o modo de cada um.
+- **Credenciais por loja:** Access Token e segredo do webhook da conta do próprio lojista, guardados criptografados com a `FISCAL_SECRET_KEY` (trocar essa chave obriga a salvar as credenciais de novo).
+- **Webhook:** configure no painel da aplicação Mercado Pago (Webhooks > Configurar notificações > Modo produção, evento "Order (Mercado Pago)") a URL exibida na tela da loja e cole o segredo gerado. A assinatura `x-signature` é validada; o conteúdo da notificação nunca decide nada, só dispara uma consulta autenticada ao Mercado Pago.
+- **Como a venda fecha:** a venda fica "Aguardando pagamento" com o estoque reservado e só é concluída quando o Mercado Pago confirma o **mesmo valor**. Expirou/cancelou/recusou: a venda é desfeita e o estoque volta. Cancelar venda paga estorna o total no Mercado Pago antes. Devolução parcial de venda paga por integração não é suportada (o provedor só estorna o total).
+- **Reconciliação automática:** `PAYMENT_WORKER_INTERVAL_MS` (padrão 20000; `0` desliga) consulta cobranças abertas, inclusive depois de falha de rede na criação.
+- **Não integrado (e por quê):** PagBank exige homologação obrigatória e CPF/CNPJ do cliente em todo Pix, e a maquininha deles é um app Android (SmartPOS); Asaas exige CPF/CNPJ do cliente; Efí exige mTLS no nosso servidor para o webhook; PicPay exige aprovação e certificação PCI DSS. A arquitetura (`lib/payments/`) está pronta para receber os próximos provedores.
+
 **Limitação registrada:** o adaptador `lib/db/pgAdapter.ts` e o schema `drizzle/0001_init.sql` seguem a sintaxe padrão do PostgreSQL, mas não foram executados contra um servidor Postgres real (o ambiente de desenvolvimento não tinha PostgreSQL). A primeira execução real de `npm run db:migrate` e do fluxo de cadastro/login na VPS é o teste de verdade.
 
 Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).

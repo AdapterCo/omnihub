@@ -9,6 +9,7 @@ import { listStockMapForTenant, listTransfersForSnapshot } from '@/lib/inventory
 import { listSessionsForSnapshot } from '@/lib/cash/service';
 import { listSalesForSnapshot } from '@/lib/sales/service';
 import { getSystemRole, getDiscountLimitBp, listDiscountLimits } from '@/lib/sales/discount';
+import { getPaymentConfigSummary, listOpenCharges, listPaymentTerminals, getChargeView, refreshCharge } from '@/lib/payments/service';
 import { listAudit } from '@/lib/audit/service';
 import { listTenantUsers } from '@/lib/users/service';
 import { listCustomers, listSuppliers } from '@/lib/customers/service';
@@ -61,13 +62,18 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  // quem pode configurar, a lista de limites por papel.
  const myDiscountLimitBp=await getDiscountLimitBp(db,tenantId,await getSystemRole(db,tenantId,actor.userId));
  const discountLimits=actor.permissions.has('SALE_DISCOUNT_CONFIG')?await listDiscountLimits(db,tenantId,actor):undefined;
- if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits};
+ // Pagamentos integrados: quem configura vê o resumo completo (sem segredos); quem só vende
+ // vê se Pix/maquininha estão prontos na loja. Cobranças abertas permitem retomar a espera.
+ const canConfigPayments=actor.permissions.has('PAYMENT_CONFIG');
+ const paymentConfigs=Object.fromEntries(await Promise.all(stores.map(async s=>{const c=await getPaymentConfigSummary(db,tenantId,s.id);return [s.id,canConfigPayments?c:{storeId:c.storeId,provider:c.provider,configured:c.configured,pixReady:c.pixReady,terminalReady:c.terminalReady,hasWebhookSecret:false,qrExternalPosId:'',defaultTerminalId:'',webhookPath:null,updatedAt:null}] as const})));
+ const openCharges=(await listOpenCharges(db,tenantId)).filter(ch=>isAdmin||sales.some(s=>s.id===ch.saleId&&s.storeId===actor.storeId)).map(ch=>({...ch,qrSvg:null}));
+ if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges};
  return {
   stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
   cash:cash.filter(c=>c.storeId===actor.storeId).map(c=>c.closedAt?c:{...c,opening:0}),
   sales:sales.filter(s=>s.storeId===actor.storeId),
   audit:relationalAudit.filter(a=>a.storeId===actor.storeId),
-  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,
+  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,
  };
 }
 async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
@@ -85,6 +91,13 @@ export async function GET(request:Request){
     : buildDanfeHtml(await getDanfeData(db,row.id,danfeSaleId,actor));
    return new Response(html,{status:200,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'private, no-store'}});
   }
+  const params0=new URL(request.url).searchParams;
+  // Status de uma cobrança integrada (a tela do caixa consulta enquanto espera). Sincroniza com
+  // o provedor no máximo a cada 2 s por cobrança; é idempotente (só reflete a verdade do provedor).
+  const chargeId=params0.get('charge');
+  if(chargeId){const {actor}=await context(row,user.userId);const db=database();return reply(params0.get('sync')==='0'?await getChargeView(db,row.id,chargeId,actor):await refreshCharge(db,row.id,chargeId,actor))}
+  const terminalsStore=params0.get('payment-terminals');
+  if(terminalsStore){const {actor}=await context(row,user.userId);return reply({terminals:await listPaymentTerminals(database(),row.id,terminalsStore,actor)})}
   const reportType=new URL(request.url).searchParams.get('report');
   if(reportType){
    const {actor}=await context(row,user.userId);

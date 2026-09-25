@@ -324,6 +324,8 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Descontos (§53)** | **Concluído** | Limites por papel/conta sem valor padrão, autorização de supervisor (428 + senha), registro de quem concedeu/autorizou, rateio por item, `vDesc` na NF-e/NFC-e, relatórios e UI. Falta desconto por item e política de limites por loja. |
 | **Devoluções e estornos (§54)** | **Concluído, com ressalva fiscal** | Parcial/total, estorno em dinheiro/Pix/cartão, retorno opcional ao estoque, venda nunca apagada. Venda com documento fiscal ativo é bloqueada até existir nota de devolução (finNFe=4). |
 
+| **Pagamentos integrados — Mercado Pago (Pix QR presencial + Point)** | **Concluído, sem teste com credencial real** | Venda aguarda confirmação do provedor, webhook assinado, reconciliação automática, estorno no cancelamento, resolução manual de "verificar no terminal", QR em imagem. Falta: testar com conta/maquininha reais; devolução parcial de venda integrada; próximos provedores (Efí viável por consulta; PagBank exige homologação + CPF; Asaas exige CPF; PicPay exige PCI). |
+
 ---
 
 ## Como Rodar e Verificar
@@ -338,6 +340,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **202 testes passando** (0 falhas).
+   *Resultado esperado:* **227 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).
