@@ -6,7 +6,7 @@ import type { PermissionCode } from '../authz/permissions.ts';
 // PDV (que continua operando sobre o JSON via lib/domain.ts) — ver nota em db/schema.ts.
 export const STOCK_MOVEMENT_TYPES = [
  'INITIAL', 'PURCHASE', 'SALE', 'SALE_CANCEL', 'TRANSFER_OUT', 'TRANSFER_IN',
- 'MANUAL_ADJUSTMENT', 'LOSS', 'DAMAGE', 'RETURN', 'INVENTORY_ADJUSTMENT',
+ 'MANUAL_ADJUSTMENT', 'LOSS', 'DAMAGE', 'RETURN', 'INVENTORY_ADJUSTMENT', 'RENTAL_OUT', 'RENTAL_RETURN',
 ] as const;
 export type StockMovementType = typeof STOCK_MOVEMENT_TYPES[number];
 export const TRANSFER_STATUSES = ['DRAFT', 'PENDING', 'APPROVED', 'IN_TRANSIT', 'RECEIVED', 'CANCELLED'] as const;
@@ -16,6 +16,14 @@ type Actor = { userId: string; storeId?: string | null; role?: string; permissio
 
 function requireStockPermission(actor: Actor, code: PermissionCode) {
  requirePermission(actor.permissions, code);
+}
+
+// Produto com unidade identificada (moto/locação): o saldo acompanha as unidades cadastradas
+// (lib/orders/service.ts). Ajuste avulso ou transferência por quantidade desencontraria o
+// saldo dos chassis/IMEIs, por isso ficam bloqueados.
+async function assertNotSerialized(db: D1Database, tenantId: string, productId: string): Promise<void> {
+ const row = await db.prepare('SELECT kind FROM products WHERE id = ? AND tenant_id = ?').bind(productId, tenantId).first<{ kind: string }>();
+ if (row && row.kind !== 'COMUM') throw new RuleError('Este produto tem unidades identificadas (chassi/IMEI): cadastre ou remova unidades em vez de ajustar a quantidade.', 409);
 }
 
 /**
@@ -38,6 +46,7 @@ export async function adjustStock(
  requireStockPermission(actor, 'STOCK_ADJUST');
  requireStoreAccess(actor, params.storeId);
  const { tenantId, storeId, productId, delta, type, referenceType, referenceId, userId } = params;
+ await assertNotSerialized(db, tenantId, productId);
  await db
   .prepare('INSERT INTO inventories (id, tenant_id, store_id, product_id, quantity) VALUES (?,?,?,?,0) ON CONFLICT(store_id, product_id) DO NOTHING')
   .bind(crypto.randomUUID(), tenantId, storeId, productId)
@@ -167,6 +176,7 @@ export async function createTransfer(
  requireStoreAccess(actor, params.fromStoreId);
  if (params.fromStoreId === params.toStoreId) throw new RuleError('Escolha lojas diferentes.');
  if (params.items.length === 0) throw new RuleError('Informe ao menos um item.');
+ for (const item of params.items) await assertNotSerialized(db, params.tenantId, item.productId);
  for (const item of params.items) if (!Number.isInteger(item.quantity) || item.quantity <= 0) throw new RuleError('Quantidade inválida no item de transferência.');
  const id = crypto.randomUUID();
  await db

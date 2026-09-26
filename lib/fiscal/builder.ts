@@ -76,6 +76,8 @@ const PAYMENT_METHOD_MAP: Record<string, string> = {
     Dinheiro: '01',
     Pix: '17',
     Cartão: '03', // Cartão de crédito padrão
+    // Venda de pedido com parcelas no boleto (lib/orders): tPag 15 = Boleto Bancário (tabela oficial de tPag).
+    Boleto: '15',
 };
 
 function formatMoney(cents: number): string {
@@ -343,7 +345,9 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     // 7. Grupo pag
     xml += `<pag>`;
     payments.forEach((p) => {
-        const tPag = PAYMENT_METHOD_MAP[p.method] || '99';
+        // Forma sem código mapeado bloqueia: '99' (Outros) seria um valor presumido no documento fiscal.
+        const tPag = PAYMENT_METHOD_MAP[p.method];
+        if (!tPag) throw new RuleError(`Forma de pagamento "${p.method}" sem código fiscal (tPag) definido. Não é possível emitir o documento.`, 422);
         xml += `<detPag>`;
         xml += `<tPag>${tPag}</tPag>`;
         xml += `<vPag>${formatMoney(p.amount)}</vPag>`;

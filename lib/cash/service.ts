@@ -54,7 +54,9 @@ async function computeExpected(db: D1Database, tenantId: string, session: Sessio
  const withdrawal = await db.prepare("SELECT COALESCE(SUM(amount),0) AS total FROM cash_movements WHERE cash_session_id = ? AND type = 'WITHDRAWAL'").bind(session.id).first<{ total: number }>();
  // §54: devolução estornada em dinheiro sai do caixa (movimento REFUND) e reduz o esperado.
  const refunds = await db.prepare("SELECT COALESCE(SUM(amount),0) AS total FROM cash_movements WHERE cash_session_id = ? AND type = 'REFUND'").bind(session.id).first<{ total: number }>();
- return session.opening_amount + (cashSales?.total ?? 0) + (supply?.total ?? 0) - (withdrawal?.total ?? 0) - (refunds?.total ?? 0);
+ // Recebimento de pedido fora de venda (ex.: adesão de locação paga em dinheiro) entra no caixa.
+ const receipts = await db.prepare("SELECT COALESCE(SUM(amount),0) AS total FROM cash_movements WHERE cash_session_id = ? AND type = 'RECEIPT'").bind(session.id).first<{ total: number }>();
+ return session.opening_amount + (cashSales?.total ?? 0) + (supply?.total ?? 0) - (withdrawal?.total ?? 0) - (refunds?.total ?? 0) + (receipts?.total ?? 0);
 }
 
 export async function closeSession(db: D1Database, tenantId: string, id: string, counted: number, actor: Actor, now = Date.now()): Promise<void> {

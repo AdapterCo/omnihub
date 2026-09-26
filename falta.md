@@ -326,6 +326,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 
 | **Pagamentos integrados — Mercado Pago (Pix QR presencial + Point)** | **Concluído, sem teste com credencial real** | Venda aguarda confirmação do provedor, webhook assinado, reconciliação automática, estorno no cancelamento, resolução manual de "verificar no terminal", QR em imagem. Falta: testar com conta/maquininha reais; devolução parcial de venda integrada; próximos provedores (Efí viável por consulta; PagBank exige homologação + CPF; Asaas exige CPF; PicPay exige PCI). |
 | **Correções pós-teste: login de membros e visão geral** | **Concluído** | Membro criado com e-mail + senha (`user.create`), "Definir acesso" para membros antigos/redefinição (`user.credentials.set`), remoção encerra sessões; visão geral sem canceladas/pendentes e líquida de devoluções, selo "Cancelada" em vermelho. Falta: recuperação de senha por e-mail (exige SMTP), troca da própria senha pelo membro. |
+| **Vendas com contrato e locação — fase 1 (modalidades, unidades, pedidos, Vendedor online)** | **Concluído** | Modalidades PDV/Venda com contrato/Locação por loja; unidades com chassi/IMEI; pedidos com reserva, edição, observações, cancelamento e finalização na loja (venda → caixa/estoque/fiscal; locação → aparelho locado, adesão no caixa). Faltam: fase 2 (documentos), 3 (contratos PDF), 4–5 (Adapter Sign + webhook), 6 (boletos Asaas, inadimplência, lembretes WhatsApp/e-mail), devolução de locação e opção de compra. |
 
 ---
 
@@ -341,6 +342,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **229 testes passando** (0 falhas).
+   *Resultado esperado:* **237 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).

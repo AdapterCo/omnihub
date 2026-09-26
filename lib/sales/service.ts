@@ -1,7 +1,8 @@
 import { RuleError } from '../errors.ts';
 import { requirePermission, requireStoreAccess } from '../authz/service.ts';
 import type { Actor, Sale } from '../domain.ts';
-import { getStore, getProductForSale } from '../catalog/service.ts';
+import { getStore, getProductForSale, storeHasModality } from '../catalog/service.ts';
+import { releaseOrderForCancelledSale } from '../orders/service.ts';
 import { findOpenSessionForUser } from '../cash/service.ts';
 import { buildSaleStockStatements, applySaleStockBatch } from '../inventory/service.ts';
 import { allocateDiscount, computeDiscountCents, resolveDiscountAuthority, type DiscountRequest, type SupervisorAuthorization } from './discount.ts';
@@ -25,12 +26,17 @@ export async function createSale(
  now = Date.now(),
  // Pagamento integrado (lib/payments): a venda nasce PENDING_PAYMENT (§17) com o estoque já
  // reservado e só vira COMPLETED quando o provedor confirma o pagamento.
- options: { pendingPayment?: boolean } = {},
+ options: { pendingPayment?: boolean; fromOrder?: { unitPrice: number } } = {},
 ): Promise<string> {
  requirePermission(actor.permissions, 'SALE_CREATE');
  const store = await getStore(db, tenantId, params.storeId);
  if (!store) throw new RuleError('Loja não encontrada.', 404);
  requireStoreAccess(actor, params.storeId);
+ // Modalidades por loja: o PDV só vende se a loja tiver a modalidade PDV. Pedidos (venda com
+ // contrato) finalizam por aqui também, mas não dependem da modalidade PDV.
+ if (!options.fromOrder && !storeHasModality(store, 'PDV')) throw new RuleError(`A loja ${store.name} não tem a modalidade PDV (frente de caixa) habilitada.`, 409);
+ if (options.fromOrder && (params.items.length !== 1 || params.items[0].qty !== 1)) throw new RuleError('Pedido gera venda de uma única unidade.', 400);
+ if (params.discount && options.fromOrder) throw new RuleError('Desconto de pedido é negociado no valor do pedido.', 400);
  const session = await findOpenSessionForUser(db, tenantId, params.storeId, actor.userId);
  if (!session) throw new RuleError('Abra seu caixa nesta loja antes de vender.', 409);
  const ids = new Set(params.items.map((x) => x.productId));
@@ -41,7 +47,10 @@ export async function createSale(
  for (const item of params.items) {
   const product = await getProductForSale(db, tenantId, item.productId);
   if (!product) throw new RuleError('Produto não encontrado.', 404);
-  items.push({ productId: product.id, name: product.name, sku: product.sku, qty: item.qty, price: product.price });
+  // Moto/locação têm unidade física (chassi/IMEI): só saem por pedido, nunca pela quantidade avulsa do PDV.
+  if (product.kind !== 'COMUM' && !options.fromOrder) throw new RuleError(`${product.name} é vendido por pedido (aba Pedidos), com o chassi/IMEI da unidade.`, 409);
+  const price = options.fromOrder ? options.fromOrder.unitPrice : product.price;
+  items.push({ productId: product.id, name: product.name, sku: product.sku, qty: item.qty, price });
   stockAdjustments.push({ storeId: params.storeId, productId: product.id, qty: item.qty });
  }
  const gross = items.reduce((a, i) => a + i.price * i.qty, 0);
@@ -130,6 +139,8 @@ export async function cancelSale(db: D1Database, tenantId: string, id: string, a
  const items = await db.prepare('SELECT product_id AS productId, qty FROM sale_items WHERE sale_id = ?').bind(id).all<{ productId: string; qty: number }>();
  await applySaleStockBatch(db, tenantId, (items.results ?? []).map((i) => ({ storeId: sale.store_id, productId: i.productId, qty: i.qty })), actor.userId, id, { reverse: true }, now);
  await db.prepare("UPDATE sales SET status = 'CANCELLED' WHERE id = ?").bind(id).run();
+ // Venda que veio de pedido: a unidade (chassi) volta a ficar disponível e o pedido fica cancelado.
+ await releaseOrderForCancelledSale(db, tenantId, id, actor, now);
 }
 
 export async function listSalesForSnapshot(db: D1Database, tenantId: string): Promise<Sale[]> {

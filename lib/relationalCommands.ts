@@ -15,6 +15,7 @@ import { saveFiscalStoreConfig, uploadCertificate, testSefazConnectivity, genera
 import { saveNFCeStoreConfig, generateNFCeForSale } from './fiscal/nfce.ts';
 import { enqueueFiscalJob, runFiscalJobWorker } from './fiscal/queue.ts';
 import { requirePermission } from './authz/service.ts';
+import { registerUnit, removeUnit, createOrder, updateOrder, cancelOrder, completeOrder, addOrderNote } from './orders/service.ts';
 
 // Dispatcher único de todos os comandos de /api/workspace (Fase 1–3 cortadas): não há mais
 // um `execute()` sobre um JSON por conta — cada comando é uma escrita relacional própria,
@@ -147,6 +148,43 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
             entityId: id,
             after: { saleId: command.saleId, items: command.items, refundMethod: command.refundMethod, reason: command.reason },
         });
+        return id;
+    }
+    if (command.type === 'unit.register') {
+        const id = await registerUnit(db, tenantId, command, actor, now);
+        await audit({ storeId: command.storeId, description: `Unidade ${command.serial} cadastrada`, entity: 'product_unit', entityId: id, after: { productId: command.productId, serial: command.serial } });
+        return id;
+    }
+    if (command.type === 'unit.remove') {
+        await removeUnit(db, tenantId, command.id, actor, now);
+        await audit({ description: 'Unidade removida do estoque', entity: 'product_unit', entityId: command.id });
+        return command.id;
+    }
+    if (command.type === 'order.create') {
+        const { type: _t, orderType, ...rest } = command;
+        const id = await createOrder(db, tenantId, { ...rest, type: orderType }, actor, now);
+        await audit({ storeId: command.storeId, description: `Pedido de ${orderType === 'VENDA' ? 'venda' : 'locação'} criado (unidade reservada)`, entity: 'order', entityId: id, after: rest });
+        return id;
+    }
+    if (command.type === 'order.update') {
+        const { type: _t, id, ...rest } = command;
+        await updateOrder(db, tenantId, id, rest, actor, now);
+        await audit({ description: 'Pedido alterado', entity: 'order', entityId: id, after: rest });
+        return id;
+    }
+    if (command.type === 'order.cancel') {
+        await cancelOrder(db, tenantId, command.id, command.reason, actor, now);
+        await audit({ description: `Pedido cancelado: ${command.reason}`, entity: 'order', entityId: command.id });
+        return command.id;
+    }
+    if (command.type === 'order.complete') {
+        const result = await completeOrder(db, tenantId, command.id, actor, now);
+        await audit({ description: result.saleId ? 'Pedido finalizado na loja (venda gerada)' : 'Locação finalizada: equipamento entregue', entity: 'order', entityId: command.id, after: result });
+        return command.id;
+    }
+    if (command.type === 'order.note') {
+        const id = await addOrderNote(db, tenantId, command.id, command.text, actor, now);
+        await audit({ description: 'Observação adicionada ao pedido', entity: 'order', entityId: command.id });
         return id;
     }
     if (command.type === 'payment.config.save') {

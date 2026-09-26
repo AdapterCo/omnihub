@@ -64,7 +64,7 @@ export const userCommandSchema = z.discriminatedUnion('type', [
         type: z.literal('user.assign'),
         userId: identifier,
         displayName: short.min(2),
-        role: z.enum(['ADMIN', 'GERENTE', 'OPERADOR_CAIXA', 'ESTOQUISTA', 'CONSULTA']),
+        role: z.enum(['ADMIN', 'GERENTE', 'OPERADOR_CAIXA', 'ESTOQUISTA', 'CONSULTA', 'VENDEDOR_ONLINE']),
         storeId: identifier.nullable().optional(),
     }),
     z.object({
@@ -72,7 +72,7 @@ export const userCommandSchema = z.discriminatedUnion('type', [
         displayName: short.min(2),
         email: z.string().trim().min(3).max(254),
         password: z.string().min(8).max(128),
-        role: z.enum(['ADMIN', 'GERENTE', 'OPERADOR_CAIXA', 'ESTOQUISTA', 'CONSULTA']),
+        role: z.enum(['ADMIN', 'GERENTE', 'OPERADOR_CAIXA', 'ESTOQUISTA', 'CONSULTA', 'VENDEDOR_ONLINE']),
         storeId: identifier.nullable().optional(),
     }),
     z.object({
@@ -191,6 +191,33 @@ export const paymentCommandSchema = z.discriminatedUnion('type', [
 ]);
 export type PaymentCommand = z.infer<typeof paymentCommandSchema>;
 
-export const commandSchema = z.union([relationalCommandSchema, cashCommandSchema, saleCommandSchema, userCommandSchema, customerCommandSchema, supplierCommandSchema, fiscalCommandSchema, paymentCommandSchema]);
+// Pedidos de venda com contrato (moto) e de locação, com unidade identificada (chassi/IMEI).
+const orderTerms = {
+    customerId: identifier,
+    unitId: identifier,
+    total: cents.optional(),
+    purchaseDate: z.string().max(10).optional(),
+    downPayment: cents.optional(),
+    downPaymentMethod: z.string().max(20).optional(),
+    installments: z.number().int().min(0).max(60).optional(),
+    firstDueDate: z.string().max(10).optional(),
+    adhesionAmount: cents.optional(),
+    adhesionBilling: z.enum(['BOLETO', 'LOJA']).optional(),
+    adhesionPaymentMethod: z.string().max(20).optional(),
+    monthlyAmount: cents.optional(),
+    dueDay: z.number().int().min(1).max(28).optional(),
+};
+export const orderCommandSchema = z.discriminatedUnion('type', [
+    z.object({ type: z.literal('unit.register'), storeId: identifier, productId: identifier, serial: z.string().trim().min(1).max(40), color: short.optional(), memory: short.optional(), condition: short.optional() }).strict(),
+    z.object({ type: z.literal('unit.remove'), id: identifier }).strict(),
+    z.object({ type: z.literal('order.create'), storeId: identifier, orderType: z.enum(['VENDA', 'LOCACAO']), ...orderTerms }).strict(),
+    z.object({ type: z.literal('order.update'), id: identifier, ...orderTerms }).strict(),
+    z.object({ type: z.literal('order.cancel'), id: identifier, reason: short.min(5) }).strict(),
+    z.object({ type: z.literal('order.complete'), id: identifier }).strict(),
+    z.object({ type: z.literal('order.note'), id: identifier, text: z.string().trim().min(1).max(2000) }).strict(),
+]);
+export type OrderCommand = z.infer<typeof orderCommandSchema>;
+
+export const commandSchema = z.union([relationalCommandSchema, cashCommandSchema, saleCommandSchema, userCommandSchema, customerCommandSchema, supplierCommandSchema, fiscalCommandSchema, paymentCommandSchema, orderCommandSchema]);
 export type Command = z.infer<typeof commandSchema>;
 

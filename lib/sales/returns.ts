@@ -52,6 +52,10 @@ export async function returnSale(
     if (sale.status === 'PENDING_PAYMENT') throw new RuleError('Venda aguardando pagamento não pode receber devolução.', 409);
     // Pagamento integrado (Mercado Pago presencial) só aceita estorno TOTAL no provedor: devolução
     // parcial registraria um estorno que o provedor não faz. Use o cancelamento da venda.
+    // Venda de pedido (moto com chassi): a unidade física e as parcelas no boleto não entram na
+    // devolução por item; o caminho suportado é cancelar a venda (a unidade volta ao estoque).
+    const fromOrder = await db.prepare('SELECT id FROM orders WHERE sale_id = ? AND tenant_id = ?').bind(params.saleId, tenantId).first<{ id: string }>();
+    if (fromOrder) throw new RuleError('Venda de pedido (unidade com chassi/série): devolução por item não é suportada. Use "Cancelar venda" para desfazer (a unidade volta ao estoque).', 409);
     const integrated = await db.prepare('SELECT status FROM payment_charges WHERE sale_id = ? AND tenant_id = ?').bind(params.saleId, tenantId).first<{ status: string }>();
     if (integrated) {
         throw new RuleError('Venda paga por pagamento integrado: o provedor só faz estorno total. Use "Cancelar venda" (o estorno no provedor é feito automaticamente); devolução parcial ainda não é suportada nesse caso.', 409);

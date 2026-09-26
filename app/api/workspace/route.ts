@@ -5,6 +5,7 @@ import { RuleError, type Actor } from '@/lib/domain';
 import { commandSchema } from '@/lib/commands';
 import { loadPermissions } from '@/lib/authz/service';
 import { listStores, listProductsForSnapshot } from '@/lib/catalog/service';
+import { listOrders, listUnits } from '@/lib/orders/service';
 import { listStockMapForTenant, listTransfersForSnapshot } from '@/lib/inventory/service';
 import { listSessionsForSnapshot } from '@/lib/cash/service';
 import { listSalesForSnapshot } from '@/lib/sales/service';
@@ -43,7 +44,7 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
   canViewCustomers?listCustomers(db,tenantId,actor):Promise.resolve([]),
   canViewSuppliers?listSuppliers(db,tenantId,actor):Promise.resolve([]),
  ]);
- const storeRecords=stores.map(s=>({id:s.id,name:s.name,legalName:s.legalName,cnpj:s.cnpj,ie:s.ie,regime:s.regime,uf:s.uf,city:s.city,municipalityCode:s.municipalityCode,address:s.address,number:s.number,district:s.district,zip:s.zip}));
+ const storeRecords=stores.map(s=>({id:s.id,name:s.name,legalName:s.legalName,cnpj:s.cnpj,ie:s.ie,regime:s.regime,uf:s.uf,city:s.city,municipalityCode:s.municipalityCode,address:s.address,number:s.number,district:s.district,zip:s.zip,modalities:s.modalities}));
  let fiscalConfigs: Record<string, FiscalStoreConfig> | undefined = undefined;
  let fiscalDocuments: Record<string, FiscalDocumentSummary> | undefined = undefined;
  let fiscalInutilizations: Record<string, FiscalInutilizationSummary[]> | undefined = undefined;
@@ -66,14 +67,20 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  // vê se Pix/maquininha estão prontos na loja. Cobranças abertas permitem retomar a espera.
  const canConfigPayments=actor.permissions.has('PAYMENT_CONFIG');
  const paymentConfigs=Object.fromEntries(await Promise.all(stores.map(async s=>{const c=await getPaymentConfigSummary(db,tenantId,s.id);return [s.id,canConfigPayments?c:{storeId:c.storeId,provider:c.provider,configured:c.configured,pixReady:c.pixReady,terminalReady:c.terminalReady,hasWebhookSecret:false,qrExternalPosId:'',defaultTerminalId:'',webhookPath:null,updatedAt:null}] as const})));
- const openCharges=(await listOpenCharges(db,tenantId)).filter(ch=>isAdmin||sales.some(s=>s.id===ch.saleId&&s.storeId===actor.storeId)).map(ch=>({...ch,qrSvg:null}));
- if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges};
+ // Membro sem loja atribuída (storeId nulo) enxerga todas as lojas, como já acontece nas regras
+ // de acesso do backend (requireStoreAccess); antes o filtro abaixo escondia tudo dele.
+ const inScope=(storeId:string|undefined)=>!actor.storeId||storeId===actor.storeId;
+ const openCharges=(await listOpenCharges(db,tenantId)).filter(ch=>isAdmin||sales.some(s=>s.id===ch.saleId&&inScope(s.storeId))).map(ch=>({...ch,qrSvg:null}));
+ // Pedidos (venda com contrato/locação) e unidades com chassi/IMEI.
+ const orders=await listOrders(db,tenantId,actor);
+ const units=(actor.permissions.has('STOCK_VIEW')||actor.permissions.has('ORDER_VIEW'))?(await listUnits(db,tenantId)).filter(u=>isAdmin||inScope(u.storeId)):[];
+ if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units};
  return {
   stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
-  cash:cash.filter(c=>c.storeId===actor.storeId).map(c=>c.closedAt?c:{...c,opening:0}),
-  sales:sales.filter(s=>s.storeId===actor.storeId),
-  audit:relationalAudit.filter(a=>a.storeId===actor.storeId),
-  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,
+  cash:cash.filter(c=>inScope(c.storeId)).map(c=>c.closedAt?c:{...c,opening:0}),
+  sales:sales.filter(s=>inScope(s.storeId)),
+  audit:relationalAudit.filter(a=>inScope(a.storeId)),
+  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,
  };
 }
 async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
