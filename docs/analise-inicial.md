@@ -492,3 +492,12 @@ Implementado a partir da lista de melhorias da auditoria anterior: rate limit de
 **Achados no caminho.** (1) Recuperação de criação incerta dependia do `qr_data` na resposta repetida — refeita: recupera o pedido pela mesma chave e cancela se aberto (o QR nunca foi exibido). (2) Assinatura do webhook: o `data.id` do manifest é o da URL; o do corpo só serve para localizar o pedido. (3) Documentação do Mercado Pago contraditória no estorno (`/refund` no texto de referência x `/refunds` num exemplo) — adotado `/refund`, confirmado na referência da API. (4) Credencial ilegível após troca da `FISCAL_SECRET_KEY` agora gera mensagem acionável.
 
 **Riscos e pendências.** Nunca executado com credenciais e maquininha reais (só API real com token falso e mock nos testes). Devolução parcial de venda paga por integração bloqueada. Tipo de cartão (crédito/débito) da Point não é gravado; `tPag` do documento fiscal continua presumindo crédito para "Cartão" (pendência já registrada). Próximos provedores dependem das condições acima.
+
+
+## Correções pós-teste em produção: login de membros e visão geral (2026-09-26)
+
+**Achado 1 — membro sem login.** `assignTenantUser` (herdado do login pelo ChatGPT, em que o ID vinha do provedor) criava `users` só com `id` e `display_name`; depois da migração para e-mail+senha ninguém mais conseguia entrar como membro. Correção: `createTenantUser` (e-mail único, senha scrypt, desfaz o usuário se o vínculo falhar), `setTenantUserCredentials` (define/redefine; derruba sessões; OWNER intocável; ADMIN só pelo OWNER; não permite alterar a si mesmo pela tela de equipe), `user.assign` com `mustExist` na API. Remoção zera e-mail/senha e sessões (um usuário pertence a uma conta só — `memberships.user_id` é chave), preservando o id nos registros históricos. Senha nunca vai para auditoria/log (chaves `password` já mascaradas em `lib/audit/service.ts` e `lib/log.ts`).
+
+**Achado 2 — visão geral.** "Vendas de hoje" e "Vendas realizadas" somavam todas as vendas do dia, inclusive `CANCELLED` (tentativas de cobrança integrada desfeitas contam como canceladas) e `PENDING_PAYMENT`. Agora: válidas = não canceladas e não pendentes; valor = total líquido − devolvido; contagem sem `REFUNDED`. A classe `.badge.error` usada para "Cancelada" não existia em `globals.css`, então o selo aparecia com a cor padrão (azul) — criada.
+
+**Pendências.** Recuperação de senha por e-mail e verificação de e-mail (exigem SMTP); o membro ainda não troca a própria senha pela interface (o admin redefine em "Definir acesso").

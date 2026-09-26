@@ -9,7 +9,7 @@ import { returnSale } from './sales/returns.ts';
 import { listDiscountLimits, saveDiscountLimits } from './sales/discount.ts';
 import { savePaymentConfig, startCharge, cancelCharge, resolveCharge, cancelSaleWithRefund, type PaymentDeps } from './payments/service.ts';
 import { recordAudit } from './audit/service.ts';
-import { assignTenantUser, removeTenantUser } from './users/service.ts';
+import { assignTenantUser, createTenantUser, removeTenantUser, setTenantUserCredentials } from './users/service.ts';
 import { createCustomer, updateCustomer, createSupplier, updateSupplier } from './customers/service.ts';
 import { saveFiscalStoreConfig, uploadCertificate, testSefazConnectivity, generateNFeForSale, transmitNFe, cancelNFeDocument, inutilizeFiscalNumbering } from './fiscal/service.ts';
 import { saveNFCeStoreConfig, generateNFCeForSale } from './fiscal/nfce.ts';
@@ -193,8 +193,19 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         return command.id;
     }
     if (command.type === 'user.assign') {
-        await assignTenantUser(db, tenantId, command, actor, now);
+        await assignTenantUser(db, tenantId, command, actor, now, { mustExist: true });
         await audit({ description: `Atribuição de papel ${command.role} para ${command.displayName}`, entity: 'user', entityId: command.userId, after: { role: command.role, storeId: command.storeId } });
+        return command.userId;
+    }
+    if (command.type === 'user.create') {
+        const userId = await createTenantUser(db, tenantId, command, actor, now);
+        // Nunca grava a senha na auditoria.
+        await audit({ description: `Novo membro ${command.displayName} (${command.role}) com login próprio`, entity: 'user', entityId: userId, after: { role: command.role, storeId: command.storeId ?? null } });
+        return userId;
+    }
+    if (command.type === 'user.credentials.set') {
+        await setTenantUserCredentials(db, tenantId, command, actor);
+        await audit({ description: `Acesso (e-mail e senha) redefinido para o membro ${command.userId.slice(0, 8)}`, entity: 'user', entityId: command.userId });
         return command.userId;
     }
     if (command.type === 'user.remove') {

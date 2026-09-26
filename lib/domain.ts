@@ -18,7 +18,7 @@ export type Sale={id:string;storeId:string;storeName:string;storeCnpj:string;cas
 export type SaleReturn={id:string;createdAt:number;operator:string;reason:string;refundMethod:string;total:number;items:{productId:string;name:string;qty:number;amount:number;restock:boolean}[]};
 export type Transfer={id:string;from:string;to:string;productId:string;productName:string;qty:number;status:'transit'|'received'|'cancelled';createdAt:number;receivedAt?:number;cancelledAt?:number;operator:string};
 export type Audit={id:string;at:number;userId:string;operator:string;action:string;description:string;storeId?:string};
-export type TenantUser={id:string;displayName:string;role:string;storeId:string|null;storeName?:string;createdAt:number};
+export type TenantUser={id:string;displayName:string;email?:string;hasLogin?:boolean;role:string;storeId:string|null;storeName?:string;createdAt:number};
 export type CustomerRecord={id:string;tenantId:string;name:string;document:string;docType:'CPF'|'CNPJ';ie:string;indIeDest:'1'|'2'|'9';email:string;phone:string;zip:string;address:string;number:string;complement:string;district:string;city:string;state:string;municipalityCode:string;createdAt:number;updatedAt:number};
 export type SupplierRecord={id:string;tenantId:string;name:string;tradeName:string;document:string;docType:'CNPJ'|'CPF';ie:string;email:string;phone:string;contactName:string;zip:string;address:string;number:string;complement:string;district:string;city:string;state:string;municipalityCode:string;createdAt:number;updatedAt:number};
 export type { FiscalStoreConfig, CertificateSummary, ConnectivityTestResult, FiscalDocumentSummary, FiscalInutilizationSummary } from './fiscal/service.ts';

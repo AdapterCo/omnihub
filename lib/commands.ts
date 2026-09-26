@@ -68,6 +68,20 @@ export const userCommandSchema = z.discriminatedUnion('type', [
         storeId: identifier.nullable().optional(),
     }),
     z.object({
+        type: z.literal('user.create'),
+        displayName: short.min(2),
+        email: z.string().trim().min(3).max(254),
+        password: z.string().min(8).max(128),
+        role: z.enum(['ADMIN', 'GERENTE', 'OPERADOR_CAIXA', 'ESTOQUISTA', 'CONSULTA']),
+        storeId: identifier.nullable().optional(),
+    }),
+    z.object({
+        type: z.literal('user.credentials.set'),
+        userId: identifier,
+        email: z.string().trim().min(3).max(254),
+        password: z.string().min(8).max(128),
+    }),
+    z.object({
         type: z.literal('user.remove'),
         userId: identifier,
     }),
