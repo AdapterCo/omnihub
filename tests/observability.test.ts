@@ -59,7 +59,11 @@ test('log emite uma linha JSON, respeita LOG_LEVEL e manda warn/error para stder
 });
 
 test('checkHealth: ok com banco saudável; erro se a consulta falha ou trava (sem detalhes internos)', async () => {
- const ok = await checkHealth(createFakeD1());
+ // A primeira consulta do banco de teste aplica as migrações (no modo PostgreSQL, com a suíte
+ // inteira em paralelo, isso pode passar dos 3 s do health check): aquece antes de medir.
+ const healthy = createFakeD1();
+ await healthy.prepare('SELECT 1 AS ok').bind().first();
+ const ok = await checkHealth(healthy);
  assert.equal(ok.ok, true);
  assert.equal(ok.checks.database, 'ok');
 
