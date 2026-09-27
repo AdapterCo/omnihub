@@ -71,7 +71,7 @@ test('guardedLogin: 5 senhas erradas trancam o e-mail; senha certa também é ba
  await assert.rejects(() => guardedLogin(db, 'maria@empresa.com', input.password, '198.51.100.1', t0 + 10), /Muitas tentativas/);
  const later = t0 + 16 * 60 * 1000;
  const ok = await guardedLogin(db, 'maria@empresa.com', input.password, '203.0.113.9', later);
- assert.ok(await getSessionUser(db, ok.token, later));
+ assert.ok('token' in ok && await getSessionUser(db, ok.token, later));
 });
 
 test('guardedLogin: login correto zera o contador de erros do e-mail', async () => {

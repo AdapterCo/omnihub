@@ -15,6 +15,15 @@ services:
       ADAPTER_SIGN_BASE_URL: ${ADAPTER_SIGN_BASE_URL:-https://sign.adapterco.com.br/api/v1}
       SIGNATURE_WORKER_INTERVAL_MS: ${SIGNATURE_WORKER_INTERVAL_MS:-60000}
       BILLING_WORKER_INTERVAL_MS: ${BILLING_WORKER_INTERVAL_MS:-60000}
+      REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+      # Recuperação de senha por e-mail (SMTP próprio). Sem todas preenchidas, fica desligada.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      APP_URL: ${APP_URL:-}
     volumes:
       - omnihub_files:/data/storage
     # Sem resposta saudável, o Docker marca o container como unhealthy e o Traefik para de

@@ -17,10 +17,15 @@ export async function POST(request: Request) {
         const body = await readJsonLimited<{ email?: unknown; password?: unknown }>(request, 8 * 1024);
         if (!body || typeof body.email !== 'string' || typeof body.password !== 'string') return reply({ error: 'Informe e-mail e senha.' }, 400);
         emailRef = pseudonym(body.email);
-        const { token, expiresAt } = await guardedLogin(database(), body.email, body.password, clientIp(request.headers));
+        const result = await guardedLogin(database(), body.email, body.password, clientIp(request.headers));
+        if ('challenge' in result) {
+            // Senha certa, conta com verificação em duas etapas: a sessão só sai com o código.
+            logger.info('auth.login.2fa_pedido', { requestId, emailRef, ip: clientIp(request.headers) });
+            return reply({ twoFactorRequired: true, challenge: result.challenge });
+        }
         logger.info('auth.login.ok', { requestId, emailRef, ip: clientIp(request.headers) });
         const res = reply({ ok: true });
-        res.headers.append('Set-Cookie', sessionCookieHeader(token, expiresAt));
+        res.headers.append('Set-Cookie', sessionCookieHeader(result.token, result.expiresAt));
         return res;
     } catch (error) {
         if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);

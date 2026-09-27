@@ -127,19 +127,40 @@ export async function registerAccount(
     return { userId, accountId, token, expiresAt };
 }
 
-export async function loginWithPassword(db: D1Database, rawEmail: string, password: string, now = Date.now()): Promise<{ token: string; expiresAt: number }> {
+/** Confere e-mail + senha; devolve o usuário e se ele usa verificação em duas etapas. */
+async function authenticatePassword(db: D1Database, rawEmail: string, password: string): Promise<{ id: string; twoFactor: boolean }> {
     const email = validateEmail(rawEmail);
     const user = await db
-        .prepare('SELECT id, password_hash AS passwordHash FROM users WHERE email = ?')
+        .prepare('SELECT id, password_hash AS passwordHash, totp_enabled_at AS totpEnabledAt FROM users WHERE email = ?')
         .bind(email)
-        .first<{ id: string; passwordHash: string | null }>();
+        .first<{ id: string; passwordHash: string | null; totpEnabledAt: number | null }>();
     // Mesma mensagem E mesmo custo de tempo para e-mail inexistente e senha errada: sem o
     // hash "fantasma", a resposta rápida para e-mail desconhecido revelaria quais existem.
     const tooLong = typeof password !== 'string' || password.length > MAX_PASSWORD_LENGTH;
     const valid = tooLong ? false : user?.passwordHash ? await verifyPassword(password, user.passwordHash) : (await verifyPassword(password, await dummyHash()), false);
     if (!user || !valid) throw new RuleError('E-mail ou senha inválidos.', 401);
+    return { id: user.id, twoFactor: user.totpEnabledAt != null };
+}
+
+/** Login só com senha: recusado para quem tem verificação em duas etapas (use guardedLogin). */
+export async function loginWithPassword(db: D1Database, rawEmail: string, password: string, now = Date.now()): Promise<{ token: string; expiresAt: number }> {
+    const user = await authenticatePassword(db, rawEmail, password);
+    if (user.twoFactor) throw new RuleError('Esta conta usa verificação em duas etapas: informe o código do aplicativo.', 401);
     return createSession(db, user.id, now);
 }
+
+// Desafio de login: senha certa + verificação em duas etapas ligada → em vez da sessão, um token
+// curto (5 min, até 5 tentativas de código) que só vale para informar o código.
+export const LOGIN_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+export const LOGIN_CHALLENGE_MAX_ATTEMPTS = 5;
+async function createLoginChallenge(db: D1Database, userId: string, now: number): Promise<string> {
+    const token = randomBytes(32).toString('hex');
+    await db.prepare('DELETE FROM login_challenges WHERE user_id = ? OR expires_at < ?').bind(userId, now).run();
+    await db.prepare('INSERT INTO login_challenges (token_hash, user_id, expires_at, attempts, created_at) VALUES (?,?,?,0,?)').bind(sessionTokenHash(token), userId, now + LOGIN_CHALLENGE_TTL_MS, now).run();
+    return token;
+}
+
+export type LoginResult = { token: string; expiresAt: number } | { challenge: string };
 
 /**
  * Confere e-mail + senha SEM criar sessão (usado para autorização de supervisor, §53).
@@ -172,17 +193,18 @@ export function isRegistrationEnabled(env: Record<string, string | undefined> = 
 }
 
 /** Login com limite de tentativas por e-mail e por IP (5 erros/15 min por e-mail, 20 por IP). */
-export async function guardedLogin(db: D1Database, rawEmail: string, password: string, ip: string | null, now = Date.now()) {
+export async function guardedLogin(db: D1Database, rawEmail: string, password: string, ip: string | null, now = Date.now()): Promise<LoginResult> {
     const email = validateEmail(rawEmail);
     const emailBucket = `login:email:${email}`;
     const ipBucket = `login:ip:${ip ?? 'desconhecido'}`;
     await assertNotLocked(db, emailBucket, now);
     await assertNotLocked(db, ipBucket, now);
     try {
-        const session = await loginWithPassword(db, email, password, now);
+        const user = await authenticatePassword(db, email, password);
         await resetBucket(db, emailBucket);
         await purgeExpiredAuthData(db, now);
-        return session;
+        if (user.twoFactor) return { challenge: await createLoginChallenge(db, user.id, now) };
+        return createSession(db, user.id, now);
     } catch (error) {
         if (error instanceof RuleError && error.status === 401) {
             await recordHit(db, emailBucket, LOGIN_EMAIL_RULE, now);

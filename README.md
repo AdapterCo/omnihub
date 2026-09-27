@@ -118,6 +118,12 @@ Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 - `BILLING_WORKER_INTERVAL_MS` (padrão 60000; 0 desliga) controla a conferência automática.
 - Cópia externa dos backups: `BACKUP_REMOTE=<remoto rclone> sh scripts/backup/offsite.sh` (não apaga histórico remoto).
 
+### Senhas e verificação em duas etapas
+
+- Cada usuário troca a própria senha e ativa a verificação em duas etapas em **Minha conta** (cadeado no rodapé da barra lateral).
+- "Esqueci minha senha" precisa de `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` e `APP_URL` no `.env` (veja `.env.example`); sem elas, o administrador redefine o acesso em **Equipe > Definir acesso** (isso também desliga a verificação em duas etapas do membro, para quem perdeu o celular).
+- `REGISTRATION_ENABLED=false` desativa o cadastro público.
+
 ## Próxima etapa
 
 1. Definir o provedor de cobrança, planos, valores e política de renovação; implementar ciclo completo com eventos autenticados, repetição segura e conciliação.

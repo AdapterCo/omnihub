@@ -4,6 +4,7 @@ import type { Actor, TenantUser } from '../domain.ts';
 import type { SystemRole } from '../authz/roles.ts';
 import { getStore } from '../catalog/service.ts';
 import { hashPassword, validateEmail, validatePasswordStrength } from '../auth/service.ts';
+import { resetTwoFactorStatements } from '../auth/security.ts';
 
 /**
  * Consulta a lista de membros vinculados ao tenant (§4, §18).
@@ -190,6 +191,10 @@ export async function setTenantUserCredentials(
  await db.batch([
   db.prepare('UPDATE users SET email = ?, password_hash = ? WHERE id = ?').bind(email, passwordHash, input.userId),
   db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(input.userId),
+  db.prepare('DELETE FROM password_resets WHERE user_id = ?').bind(input.userId),
+  // Redefinir o acesso é o caminho de quem perdeu o celular: desliga a verificação em duas etapas
+  // (o membro pode reativá-la no próprio perfil).
+  ...resetTwoFactorStatements(db, input.userId),
  ]);
 }
 
