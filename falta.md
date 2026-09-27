@@ -334,6 +334,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Varredura de segurança e falhas (2026-09-27)** | **Correções concluídas; melhorias listadas** | Corrigidos: auditoria exposta sem `AUDIT_VIEW`, token de sessão em texto puro, corpo de requisição sem limite de tamanho, corrida na idempotência (+ limpeza de chaves antigas). Pendentes: paginação do snapshot (vendas/auditoria), CSP com nonce, decidir cadastro público, troca/recuperação de senha, limpeza de eventos de webhook processados. |
 | **Desempenho do snapshot (melhoria 1 da varredura, 2026-09-27)** | **Concluído** | Janela de 90 dias + páginas sob demanda (vendas, caixas, auditoria), XML fiscal sob demanda, índices por conta+data; bug do modelo 55 fixo no resumo fiscal corrigido. |
 | **Senhas e verificação em duas etapas (melhorias 2 e 3 da varredura, 2026-09-27)** | **Concluído** | Cadastro público mantido aberto (decisão), com `REGISTRATION_ENABLED` agora repassado ao container; troca da própria senha; recuperação por e-mail via SMTP próprio (link de uso único, 30 min); 2FA opcional (TOTP + códigos de recuperação), desligável pelo admin em "Definir acesso". Pendente: preencher `SMTP_*`/`APP_URL` na VPS e testar com o provedor real. |
+| **CSP com nonce (melhoria 4 da varredura, 2026-09-27)** | **Concluído** | Páginas com nonce por requisição (`proxy.ts`), sem `unsafe-inline` em script; rotas de API sem nenhum script permitido. |
 
 ---
 
