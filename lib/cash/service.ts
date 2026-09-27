@@ -81,10 +81,17 @@ export async function findOpenSessionForUser(db: D1Database, tenantId: string, s
  return db.prepare('SELECT id FROM cash_sessions WHERE tenant_id = ? AND store_id = ? AND user_id = ? AND closed_at IS NULL').bind(tenantId, storeId, userId).first<{ id: string }>();
 }
 
-export async function listSessionsForSnapshot(db: D1Database, tenantId: string): Promise<Cash[]> {
+// Sem opções: todos os caixas. A tela recebe os recentes + os abertos e busca o resto por páginas.
+export async function listSessionsForSnapshot(db: D1Database, tenantId: string, opts: { since?: number; before?: number; limit?: number; storeId?: string | null } = {}): Promise<Cash[]> {
+ const where = ['tenant_id = ?'];
+ const binds: unknown[] = [tenantId];
+ if (opts.storeId) { where.push('store_id = ?'); binds.push(opts.storeId); }
+ if (opts.since !== undefined) { where.push('(opened_at >= ? OR closed_at IS NULL)'); binds.push(opts.since); }
+ if (opts.before !== undefined) { where.push('opened_at < ?'); binds.push(opts.before); }
+ const limit = opts.limit ? ` LIMIT ${Math.max(1, Math.min(2000, Math.floor(opts.limit)))}` : '';
  const rows = await db
-  .prepare('SELECT id, store_id AS storeId, user_id AS userId, operator, opened_at AS openedAt, opening_amount AS opening, closed_at AS closedAt, counted_amount AS counted, expected_amount AS expected, difference FROM cash_sessions WHERE tenant_id = ? ORDER BY opened_at DESC')
-  .bind(tenantId)
+  .prepare(`SELECT id, store_id AS storeId, user_id AS userId, operator, opened_at AS openedAt, opening_amount AS opening, closed_at AS closedAt, counted_amount AS counted, expected_amount AS expected, difference FROM cash_sessions WHERE ${where.join(' AND ')} ORDER BY opened_at DESC${limit}`)
+  .bind(...binds)
   .all<{ id: string; storeId: string; userId: string; operator: string; openedAt: number; opening: number; closedAt: number | null; counted: number | null; expected: number | null; difference: number | null }>();
  return (rows.results ?? []).map((r) => ({ id: r.id, storeId: r.storeId, userId: r.userId, operator: r.operator, openedAt: r.openedAt, opening: r.opening, closedAt: r.closedAt ?? undefined, counted: r.counted ?? undefined, expected: r.expected ?? undefined, difference: r.difference ?? undefined }));
 }

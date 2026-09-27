@@ -93,3 +93,16 @@ test('recordAudit sanitiza campos de segredo conhecidos mesmo se um chamador fut
  assert.equal(after.csc, '[REDACTED]');
  assert.equal(after.nome, 'Produto X');
 });
+
+test('listAudit: limite, página anterior e escopo de loja', async () => {
+ const { createFakeD1 } = await import('./helpers/fakeD1.ts');
+ const { recordAudit } = await import('../lib/audit/service.ts');
+ const db = createFakeD1();
+ await db.prepare("INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES ('t1','T','{}',0,'trial',9999999999999,3,0)").bind().run();
+ for (let i = 1; i <= 5; i++) await recordAudit(db, { tenantId: 't1', storeId: i % 2 ? 'loja-a' : 'loja-b', userId: 'u', operator: 'Op', action: 'x', description: `evento ${i}` }, i * 1000);
+ const latest = await listAudit(db, 't1', { limit: 2 });
+ assert.deepEqual(latest.map((a) => a.description), ['evento 5', 'evento 4']);
+ const older = await listAudit(db, 't1', { before: latest[1].at, limit: 2 });
+ assert.deepEqual(older.map((a) => a.description), ['evento 3', 'evento 2']);
+ assert.deepEqual((await listAudit(db, 't1', { storeId: 'loja-b' })).map((a) => a.description), ['evento 4', 'evento 2']);
+});

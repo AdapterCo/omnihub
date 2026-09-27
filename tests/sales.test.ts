@@ -89,3 +89,25 @@ test('listSalesForSnapshot junta itens e pagamentos, formando um rótulo de paga
  assert.equal(sales[0].total, 1990);
  assert.equal(sales[0].items.length, 1);
 });
+
+test('listSalesForSnapshot: janela recente + aguardando pagamento, páginas antigas e escopo de loja', async () => {
+ const { db, storeA, product, op } = await fixture();
+ const ids: string[] = [];
+ for (let i = 0; i < 4; i++) ids.push(await createSale(db, 't1', { storeId: storeA, items: [{ productId: product, qty: 1 }], customer: `C${i}`, document: '', payments: [{ method: 'Dinheiro', amount: 1990 }] }, op));
+ // Datas controladas: 2 vendas antigas (uma aguardando pagamento), 2 recentes.
+ const day = 86_400_000, now = Date.UTC(2026, 8, 27);
+ await db.prepare("UPDATE sales SET created_at = ? WHERE id = ?").bind(now - 200 * day, ids[0]).run();
+ await db.prepare("UPDATE sales SET created_at = ?, status = 'PENDING_PAYMENT' WHERE id = ?").bind(now - 150 * day, ids[1]).run();
+ await db.prepare("UPDATE sales SET created_at = ? WHERE id = ?").bind(now - 10 * day, ids[2]).run();
+ await db.prepare("UPDATE sales SET created_at = ? WHERE id = ?").bind(now - 1 * day, ids[3]).run();
+ const since = now - 90 * day;
+ const recent = await listSalesForSnapshot(db, 't1', { since, limit: 100 });
+ assert.deepEqual(recent.map((s) => s.id).sort(), [ids[1], ids[2], ids[3]].sort(), 'janela + pendente antiga');
+ assert.ok(recent.every((s) => s.items.length === 1 && s.payment === 'Dinheiro'), 'itens/pagamentos só das vendas carregadas');
+ const page = await listSalesForSnapshot(db, 't1', { before: since, limit: 1 });
+ assert.deepEqual(page.map((s) => s.id), [ids[1]], 'página antiga em ordem decrescente, com limite');
+ const next = await listSalesForSnapshot(db, 't1', { before: page[0].createdAt, limit: 1 });
+ assert.deepEqual(next.map((s) => s.id), [ids[0]]);
+ assert.equal((await listSalesForSnapshot(db, 't1', { storeId: 'outra-loja' })).length, 0);
+ assert.equal((await listSalesForSnapshot(db, 't1')).length, 4, 'sem opções continua trazendo tudo');
+});

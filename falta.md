@@ -332,6 +332,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Vendas com contrato e locação — fase 6 (boletos Asaas, inadimplência, encerramento da locação)** | **Concluído, sem emissão real** | Configuração Asaas por loja (ambiente escolhido, chave e token cifrados), prévia e emissão dos boletos da moto e das 12 mensalidades da locação (multa 2%/juros 1% do contrato), conciliação por webhook + worker com conferência de valor/vencimento/referência, painel de inadimplência na aba Pedidos, lembretes = configuração de avisos do próprio Asaas (a API não informa entregas), devolução/compra da locação, backup com arquivos e cópia externa por rclone. Pendente: testar com API key real no sandbox e depois em produção; alterar os lembretes de clientes já cadastrados no Asaas quando a opção da loja mudar (hoje vale para clientes novos); boleto de pedido não gera NF-e automaticamente. |
 | **Cadastro de produto por tipo (2026-09-27)** | **Concluído** | Formulário de produto com campos próprios para Comum, Moto e Locação (§22 de `docs/instrucao-sistema-vendas.md`); dados de cada unidade física (chassi/IMEI, cor, memória, estado) continuam no cadastro de unidades. Caixas de seleção das modalidades da loja corrigidas. |
 | **Varredura de segurança e falhas (2026-09-27)** | **Correções concluídas; melhorias listadas** | Corrigidos: auditoria exposta sem `AUDIT_VIEW`, token de sessão em texto puro, corpo de requisição sem limite de tamanho, corrida na idempotência (+ limpeza de chaves antigas). Pendentes: paginação do snapshot (vendas/auditoria), CSP com nonce, decidir cadastro público, troca/recuperação de senha, limpeza de eventos de webhook processados. |
+| **Desempenho do snapshot (melhoria 1 da varredura, 2026-09-27)** | **Concluído** | Janela de 90 dias + páginas sob demanda (vendas, caixas, auditoria), XML fiscal sob demanda, índices por conta+data; bug do modelo 55 fixo no resumo fiscal corrigido. |
 
 ---
 
@@ -347,6 +348,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **273 testes passando** (0 falhas).
+   *Resultado esperado:* **275 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).

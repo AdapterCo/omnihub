@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { RuleError } from '../errors.ts';
 import { localParts } from '../time.ts';
-import { requirePermission } from '../authz/service.ts';
+import { requirePermission, requireStoreAccess } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
 import {
     encryptPayload,
@@ -1302,9 +1302,10 @@ export async function listFiscalDocumentsForSnapshot(
 
     const rows = await db
         .prepare(
+            // Sem o XML: pesa KBs por nota e só é usado na janela "Ver XML", que o busca sob
+            // demanda (getFiscalDocumentXml). O snapshot recarrega a cada 60 s.
             `SELECT id, sale_id AS saleId, model, series, number, access_key AS accessKey,
-                    status, raw_xml AS rawXml, signed_xml AS signedXml,
-                    protocol_number AS protocolNumber, issued_at AS issuedAt,
+                    status, protocol_number AS protocolNumber, issued_at AS issuedAt,
                     authorized_at AS authorizedAt
              FROM fiscal_documents
              WHERE tenant_id = ? AND sale_id IS NOT NULL`,
@@ -1313,7 +1314,7 @@ export async function listFiscalDocumentsForSnapshot(
         .all<{
             id: string;
             saleId: string;
-            model: '55';
+            model: string;
             series: number;
             number: number;
             accessKey: string;
@@ -1330,17 +1331,28 @@ export async function listFiscalDocumentsForSnapshot(
         map[r.saleId] = {
             id: r.id,
             saleId: r.saleId,
-            model: '55',
+            // Antes fixo em '55': NFC-e aparecia na tela com os rótulos de NF-e.
+            model: r.model === '65' ? '65' : '55',
             series: r.series,
             number: r.number,
             accessKey: r.accessKey,
             status: r.status,
-            rawXml: r.rawXml || undefined,
-            signedXml: r.signedXml || undefined,
             protocolNumber: r.protocolNumber,
             issuedAt: r.issuedAt,
             authorizedAt: r.authorizedAt,
         };
     }
     return map;
+}
+
+/** XML de um documento fiscal, sob demanda (janela "Ver XML"/download). */
+export async function getFiscalDocumentXml(db: D1Database, tenantId: string, documentId: string, actor: Actor): Promise<{ rawXml: string; signedXml: string }> {
+    requirePermission(actor.permissions, 'FISCAL_VIEW');
+    const row = await db
+        .prepare('SELECT store_id AS storeId, raw_xml AS rawXml, signed_xml AS signedXml FROM fiscal_documents WHERE id = ? AND tenant_id = ?')
+        .bind(documentId, tenantId)
+        .first<{ storeId: string; rawXml: string | null; signedXml: string | null }>();
+    if (!row) throw new RuleError('Documento fiscal não encontrado.', 404);
+    requireStoreAccess(actor, row.storeId);
+    return { rawXml: row.rawXml ?? '', signedXml: row.signedXml ?? '' };
 }

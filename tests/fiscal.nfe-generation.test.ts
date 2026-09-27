@@ -10,7 +10,7 @@ import {
     saveFiscalStoreConfig,
     generateNFeForSale,
     getNFeDocumentBySaleId,
-    listFiscalDocumentsForSnapshot,
+    listFiscalDocumentsForSnapshot, getFiscalDocumentXml,
 } from '../lib/fiscal/service.ts';
 import { validateNFeXmlSchema } from '../lib/fiscal/validator.ts';
 import { dispatchCommand } from '../lib/relationalCommands.ts';
@@ -547,5 +547,10 @@ test('listFiscalDocumentsForSnapshot retorna documentos fiscais mapeados por sal
     assert.equal(snapshotDocs[saleId].saleId, saleId);
     assert.equal(snapshotDocs[saleId].status, 'GENERATED');
     assert.equal(snapshotDocs[saleId].number, 1);
-    assert.ok(snapshotDocs[saleId].rawXml);
+    assert.equal(snapshotDocs[saleId].model, '55');
+    // O XML não vai no snapshot (recarregado a cada 60 s); a janela "Ver XML" busca sob demanda.
+    assert.equal(snapshotDocs[saleId].rawXml, undefined);
+    const xml = await getFiscalDocumentXml(db, 't1', snapshotDocs[saleId].id, owner);
+    assert.match(xml.rawXml, /<infNFe/);
+    await assert.rejects(() => getFiscalDocumentXml(db, 'outra-conta', snapshotDocs[saleId].id, owner), /não encontrado/);
 });

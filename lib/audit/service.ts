@@ -86,14 +86,20 @@ export async function recordAudit(
         .run();
 }
 
-export async function listAudit(db: D1Database, tenantId: string): Promise<AuditEntry[]> {
+// Sem opções: todo o histórico. A tela recebe os mais recentes e busca os anteriores por páginas.
+export async function listAudit(db: D1Database, tenantId: string, opts: { before?: number; limit?: number; storeId?: string | null } = {}): Promise<AuditEntry[]> {
+    const where = ['tenant_id = ?'];
+    const binds: unknown[] = [tenantId];
+    if (opts.storeId) { where.push('store_id = ?'); binds.push(opts.storeId); }
+    if (opts.before !== undefined) { where.push('created_at < ?'); binds.push(opts.before); }
+    const limit = opts.limit ? ` LIMIT ${Math.max(1, Math.min(2000, Math.floor(opts.limit)))}` : '';
     const rows = await db
         .prepare(
             `SELECT id, created_at AS at, user_id AS userId, operator, action, description, store_id AS storeId,
                     entity, entity_id AS entityId, before_data AS beforeData, after_data AS afterData, ip, correlation_id AS correlationId
-             FROM audit_logs WHERE tenant_id = ? ORDER BY created_at DESC`,
+             FROM audit_logs WHERE ${where.join(' AND ')} ORDER BY created_at DESC${limit}`,
         )
-        .bind(tenantId)
+        .bind(...binds)
         .all<{
             id: string; at: number; userId: string; operator: string; action: string; description: string; storeId: string | null;
             entity: string | null; entityId: string | null; beforeData: string | null; afterData: string | null; ip: string | null; correlationId: string | null;

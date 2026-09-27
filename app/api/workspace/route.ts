@@ -17,7 +17,7 @@ import { getPaymentConfigSummary, listOpenCharges, listPaymentTerminals, getChar
 import { listAudit } from '@/lib/audit/service';
 import { listTenantUsers } from '@/lib/users/service';
 import { listCustomers, listSuppliers } from '@/lib/customers/service';
-import { getFiscalStoreConfig, listFiscalDocumentsForSnapshot, listFiscalInutilizationsForSnapshot, getDanfeData, type FiscalStoreConfig, type FiscalDocumentSummary, type FiscalInutilizationSummary } from '@/lib/fiscal/service';
+import { getFiscalStoreConfig, getFiscalDocumentXml, listFiscalDocumentsForSnapshot, listFiscalInutilizationsForSnapshot, getDanfeData, type FiscalStoreConfig, type FiscalDocumentSummary, type FiscalInutilizationSummary } from '@/lib/fiscal/service';
 import { getNFCeStoreConfig, getNFCeDanfeData, type NFCeStoreConfig } from '@/lib/fiscal/nfce';
 import { buildDanfeHtml, buildDanfeNfceHtml } from '@/lib/fiscal/danfe';
 import { getSalesReport, getCashReport, getFiscalReport } from '@/lib/reports/service';
@@ -35,8 +35,16 @@ async function account(userId:string){return database().prepare('SELECT a.*, m.r
 async function context(row:Row,userId:string){const permissions=await loadPermissions(database(),userId,row.id,row.role);return {actor:{userId,role:row.role,storeId:row.store_id,displayName:row.display_name,permissions} satisfies Actor,plan:{status:row.subscription_status,accessUntil:row.access_until,maxStores:row.max_stores}}}
 // Fase 1–3 cortadas (cutover): todo o estado operacional (loja/produto/estoque/
 // transferência/caixa/venda/auditoria/equipe/clientes/fornecedores/fiscal) vem das tabelas relacionais.
+// Janelas do snapshot: a tela recarrega a cada 60 s, no foco e após cada operação; carregar todo o
+// histórico da conta tornaria cada atualização mais lenta com o tempo. O que ficou de fora é
+// buscado por páginas (GET ?history=sales|cash|audit&before=<ms>).
+const SNAPSHOT_WINDOW_MS=90*24*60*60*1000;
+const SNAPSHOT_SALES_LIMIT=2000,SNAPSHOT_CASH_LIMIT=500,SNAPSHOT_AUDIT_LIMIT=300;
+const HISTORY_PAGE=50,HISTORY_AUDIT_PAGE=100;
 async function fullState(db:D1Database,tenantId:string,actor:Actor){
  const isAdmin=actor.role==='admin';
+ const scope=isAdmin?null:actor.storeId;
+ const since=Date.now()-SNAPSHOT_WINDOW_MS;
  const canViewUsers=actor.permissions.has('USER_VIEW');
  const canViewCustomers=actor.permissions.has('CUSTOMER_VIEW');
  const canViewSuppliers=actor.permissions.has('SUPPLIER_VIEW');
@@ -45,7 +53,7 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  const canViewAudit=actor.permissions.has('AUDIT_VIEW');
  const [stores,products,stock,transfers,cash,sales,relationalAudit,users,customers,suppliers]=await Promise.all([
   listStores(db,tenantId),listProductsForSnapshot(db,tenantId),listStockMapForTenant(db,tenantId),listTransfersForSnapshot(db,tenantId),
-  listSessionsForSnapshot(db,tenantId),listSalesForSnapshot(db,tenantId),canViewAudit?listAudit(db,tenantId):Promise.resolve([]),
+  listSessionsForSnapshot(db,tenantId,{since,limit:SNAPSHOT_CASH_LIMIT,storeId:scope}),listSalesForSnapshot(db,tenantId,{since,limit:SNAPSHOT_SALES_LIMIT,storeId:scope}),canViewAudit?listAudit(db,tenantId,{limit:SNAPSHOT_AUDIT_LIMIT,storeId:scope}):Promise.resolve([]),
   canViewUsers?listTenantUsers(db,tenantId,actor):Promise.resolve([]),
   canViewCustomers?listCustomers(db,tenantId,actor):Promise.resolve([]),
   canViewSuppliers?listSuppliers(db,tenantId,actor):Promise.resolve([]),
@@ -62,7 +70,8 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
    const nfceCfgs = await Promise.all(stores.map(s => getNFCeStoreConfig(db, tenantId, s.id, actor)));
    nfceConfigs = Object.fromEntries(nfceCfgs.map(c => [c.storeId, c]));
   }
-  fiscalDocuments = await listFiscalDocumentsForSnapshot(db, tenantId, actor);
+  const inWindow=new Set(sales.map(x=>x.id));
+  fiscalDocuments = Object.fromEntries(Object.entries(await listFiscalDocumentsForSnapshot(db, tenantId, actor)).filter(([saleId])=>inWindow.has(saleId)));
   fiscalInutilizations = await listFiscalInutilizationsForSnapshot(db, tenantId, actor);
  }
  // §53: limite de desconto do próprio usuário (a tela decide quando pedir supervisor) e, para
@@ -85,9 +94,11 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  const signatureConfigs=Object.fromEntries(await Promise.all(stores.map(async s=>{const c=await getSignatureConfigSummary(db,tenantId,s.id);return [s.id,canConfigSignature?c:{...c,hasWebhookSecret:false,webhookPath:null}] as const})));
  const documents=await listOrderDocuments(db,tenantId,actor);
  const units=(actor.permissions.has('STOCK_VIEW')||actor.permissions.has('ORDER_VIEW'))?(await listUnits(db,tenantId)).filter(u=>isAdmin||inScope(u.storeId)):[];
- if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,contracts,documents,signatureConfigs};
+ const hasAny=async(table:string,col:string)=>!!(await db.prepare(`SELECT 1 AS one FROM ${table} WHERE tenant_id = ?${scope?` AND store_id = ?`:''} LIMIT 1`).bind(tenantId,...(scope?[scope]:[])).first());
+ const history={windowStart:since,salesTruncated:sales.length>=SNAPSHOT_SALES_LIMIT,hasSales:sales.length>0||await hasAny('sales','created_at'),hasCash:cash.length>0||await hasAny('cash_sessions','opened_at'),auditLimit:SNAPSHOT_AUDIT_LIMIT};
+ if(isAdmin)return {history,stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,contracts,documents,signatureConfigs};
  return {
-  stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
+  history,stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
   cash:cash.filter(c=>inScope(c.storeId)).map(c=>c.closedAt?c:{...c,opening:0}),
   sales:sales.filter(s=>inScope(s.storeId)),
   audit:relationalAudit.filter(a=>inScope(a.storeId)),
@@ -116,6 +127,31 @@ export async function GET(request:Request){
   if(chargeId){const {actor}=await context(row,user.userId);const db=database();return reply(params0.get('sync')==='0'?await getChargeView(db,row.id,chargeId,actor):await refreshCharge(db,row.id,chargeId,actor))}
   const terminalsStore=params0.get('payment-terminals');
   if(terminalsStore){const {actor}=await context(row,user.userId);return reply({terminals:await listPaymentTerminals(database(),row.id,terminalsStore,actor)})}
+  const historyType=params0.get('history');
+  if(historyType){
+   const {actor}=await context(row,user.userId);const db=database();
+   const scope=actor.role==='admin'?null:actor.storeId;
+   const beforeRaw=Number(params0.get('before'));
+   if(!Number.isFinite(beforeRaw)||beforeRaw<=0)return reply({error:'Informe o ponto de corte (before) em milissegundos.'},400);
+   if(historyType==='sales'){
+    const page=await listSalesForSnapshot(db,row.id,{before:beforeRaw,limit:HISTORY_PAGE,storeId:scope});
+    let fiscalDocuments={};
+    if(actor.permissions.has('FISCAL_VIEW')){const ids=new Set(page.map(x=>x.id));fiscalDocuments=Object.fromEntries(Object.entries(await listFiscalDocumentsForSnapshot(db,row.id,actor)).filter(([saleId])=>ids.has(saleId)));}
+    return reply({sales:page,fiscalDocuments,hasMore:page.length===HISTORY_PAGE});
+   }
+   if(historyType==='cash'){
+    const page=await listSessionsForSnapshot(db,row.id,{before:beforeRaw,limit:HISTORY_PAGE,storeId:scope});
+    return reply({cash:actor.role==='admin'?page:page.map(c=>c.closedAt?c:{...c,opening:0}),hasMore:page.length===HISTORY_PAGE});
+   }
+   if(historyType==='audit'){
+    if(!actor.permissions.has('AUDIT_VIEW'))return reply({error:'Sem permissão para ver o histórico.'},403);
+    const page=await listAudit(db,row.id,{before:beforeRaw,limit:HISTORY_AUDIT_PAGE,storeId:scope});
+    return reply({audit:page,hasMore:page.length===HISTORY_AUDIT_PAGE});
+   }
+   return reply({error:'Histórico desconhecido.'},400);
+  }
+  const fiscalXmlId=params0.get('fiscal-xml');
+  if(fiscalXmlId){const {actor}=await context(row,user.userId);return reply(await getFiscalDocumentXml(database(),row.id,fiscalXmlId,actor))}
   const reportType=new URL(request.url).searchParams.get('report');
   if(reportType){
    const {actor}=await context(row,user.userId);

@@ -145,33 +145,49 @@ export async function cancelSale(db: D1Database, tenantId: string, id: string, a
  await releaseOrderForCancelledSale(db, tenantId, id, actor, now);
 }
 
-export async function listSalesForSnapshot(db: D1Database, tenantId: string): Promise<Sale[]> {
+export type SaleListOptions = {
+ /** Vendas criadas a partir deste instante, mais as que aguardam pagamento (janela do snapshot). */
+ since?: number;
+ /** Página de histórico: vendas criadas antes deste instante. */
+ before?: number;
+ limit?: number;
+ /** Escopo de loja do usuário (nulo = todas). */
+ storeId?: string | null;
+};
+
+// Sem opções: todas as vendas (uso em testes e rotinas internas). A tela recebe uma janela
+// recente (app/api/workspace) e busca o restante por páginas, para o snapshot não crescer sem fim.
+export async function listSalesForSnapshot(db: D1Database, tenantId: string, opts: SaleListOptions = {}): Promise<Sale[]> {
+  const where = ['tenant_id = ?'];
+  const binds: unknown[] = [tenantId];
+  if (opts.storeId) { where.push('store_id = ?'); binds.push(opts.storeId); }
+  if (opts.since !== undefined) { where.push("(created_at >= ? OR status = 'PENDING_PAYMENT')"); binds.push(opts.since); }
+  if (opts.before !== undefined) { where.push('created_at < ?'); binds.push(opts.before); }
+  const limit = opts.limit ? ` LIMIT ${Math.max(1, Math.min(2000, Math.floor(opts.limit)))}` : '';
   const rows = await db
    .prepare(
-    'SELECT id, store_id AS storeId, store_name AS storeName, store_cnpj AS storeCnpj, cash_session_id AS cashId, user_id AS userId, operator, customer, document, status, total, discount, discount_reason AS discountReason, discount_authorized_by_name AS discountAuthorizedBy, returned_total AS returnedTotal, print_count AS printCount, created_at AS createdAt FROM sales WHERE tenant_id = ? ORDER BY created_at DESC',
+    `SELECT id, store_id AS storeId, store_name AS storeName, store_cnpj AS storeCnpj, cash_session_id AS cashId, user_id AS userId, operator, customer, document, status, total, discount, discount_reason AS discountReason, discount_authorized_by_name AS discountAuthorizedBy, returned_total AS returnedTotal, print_count AS printCount, created_at AS createdAt FROM sales WHERE ${where.join(' AND ')} ORDER BY created_at DESC${limit}`,
    )
-   .bind(tenantId)
+   .bind(...binds)
    .all<{ id: string; storeId: string; storeName: string; storeCnpj: string; cashId: string; userId: string; operator: string; customer: string; document: string; status: string; total: number; discount: number; discountReason: string; discountAuthorizedBy: string; returnedTotal: number; printCount: number; createdAt: number }>();
   const sales = rows.results ?? [];
   if (sales.length === 0) return [];
 
-  // Três consultas em lote (itens, pagamentos, devoluções) em vez de duas por venda.
-  const itemRows = await db
-   .prepare('SELECT si.id AS id, si.sale_id AS saleId, si.product_id AS productId, si.name AS name, si.sku AS sku, si.qty AS qty, si.price AS price, si.discount AS discount FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.tenant_id = ?')
-   .bind(tenantId)
-   .all<{ id: string; saleId: string; productId: string; name: string; sku: string; qty: number; price: number; discount: number }>();
-  const paymentRows = await db
-   .prepare('SELECT sp.sale_id AS saleId, sp.method AS method FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id WHERE s.tenant_id = ?')
-   .bind(tenantId)
-   .all<{ saleId: string; method: string }>();
-  const returnRows = await db
-   .prepare('SELECT id, sale_id AS saleId, operator, reason, refund_method AS refundMethod, total, created_at AS createdAt FROM sale_returns WHERE tenant_id = ? ORDER BY created_at')
-   .bind(tenantId)
-   .all<{ id: string; saleId: string; operator: string; reason: string; refundMethod: string; total: number; createdAt: number }>();
-  const returnItemRows = await db
-   .prepare('SELECT ri.return_id AS returnId, ri.sale_item_id AS saleItemId, ri.product_id AS productId, ri.name AS name, ri.qty AS qty, ri.amount AS amount, ri.restock AS restock FROM sale_return_items ri JOIN sale_returns r ON r.id = ri.return_id WHERE r.tenant_id = ?')
-   .bind(tenantId)
-   .all<{ returnId: string; saleItemId: string; productId: string; name: string; qty: number; amount: number; restock: number }>();
+  // Itens, pagamentos e devoluções só das vendas carregadas, em lotes (limite de parâmetros).
+  const ids = sales.map((r) => r.id);
+  const inBatches = async <T>(sql: (marks: string) => string): Promise<T[]> => {
+   const out: T[] = [];
+   for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const r = await db.prepare(sql(chunk.map(() => '?').join(','))).bind(tenantId, ...chunk).all<T>();
+    out.push(...(r.results ?? []));
+   }
+   return out;
+  };
+  const itemRows = { results: await inBatches<{ id: string; saleId: string; productId: string; name: string; sku: string; qty: number; price: number; discount: number }>((m) => `SELECT si.id AS id, si.sale_id AS saleId, si.product_id AS productId, si.name AS name, si.sku AS sku, si.qty AS qty, si.price AS price, si.discount AS discount FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.tenant_id = ? AND si.sale_id IN (${m})`) };
+  const paymentRows = { results: await inBatches<{ saleId: string; method: string }>((m) => `SELECT sp.sale_id AS saleId, sp.method AS method FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id WHERE s.tenant_id = ? AND sp.sale_id IN (${m})`) };
+  const returnRows = { results: (await inBatches<{ id: string; saleId: string; operator: string; reason: string; refundMethod: string; total: number; createdAt: number }>((m) => `SELECT id, sale_id AS saleId, operator, reason, refund_method AS refundMethod, total, created_at AS createdAt FROM sale_returns WHERE tenant_id = ? AND sale_id IN (${m})`)).sort((a, b) => Number(a.createdAt) - Number(b.createdAt)) };
+  const returnItemRows = { results: await inBatches<{ returnId: string; saleItemId: string; productId: string; name: string; qty: number; amount: number; restock: number }>((m) => `SELECT ri.return_id AS returnId, ri.sale_item_id AS saleItemId, ri.product_id AS productId, ri.name AS name, ri.qty AS qty, ri.amount AS amount, ri.restock AS restock FROM sale_return_items ri JOIN sale_returns r ON r.id = ri.return_id WHERE r.tenant_id = ? AND r.sale_id IN (${m})`) };
 
   const group = <T extends Record<string, unknown>>(list: T[], key: keyof T) => {
    const map = new Map<unknown, T[]>();
