@@ -103,3 +103,5 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:var(--background);color:
 /* Pedidos e unidades (app/orders.tsx) */
 .native-select{width:100%;border:1px solid #d9e1ee;background:white;border-radius:7px;min-height:40px;padding:8px 10px;font-size:.875rem}.native-select:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px #2563eb16}.search-input{flex:1;min-width:0;border:1px solid #d9e1ee;background:white;border-radius:7px;min-height:40px;padding:9px 12px;font-size:.875rem}.order-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}.order-summary>div{display:flex;flex-direction:column;gap:3px;font-size:.875rem}.order-summary strong{font-weight:500}.section-title{display:flex;align-items:center;gap:6px;font-size:.95rem;font-weight:600;margin-bottom:8px}.note{border-left:3px solid #dbe7ff;padding:6px 10px;margin-bottom:8px;font-size:.875rem}
 @media(max-width:600px){.order-summary{grid-template-columns:1fr}}
+/* Caixas de seleção dentro de .field não herdam largura/altura dos campos de texto. */
+.field input[type=checkbox],.field input[type=radio]{width:auto;min-height:0;padding:0;flex:none}

@@ -551,3 +551,8 @@ Implementado a partir da lista de melhorias da auditoria anterior: rate limit de
 **Correções da revisão.** Webhook respondia 400 para eventos sem cobrança (o Asaas penaliza a fila da conta inteira com respostas de erro) → agora 200 e ignora; `RECEIVED_IN_CASH`/`DUNNING_RECEIVED` não contavam como pago; comentário apontava para `docs/asaas.md` inexistente; teste de backup falhava no Windows (o `tar` lê `C:/...` como host remoto) → nome do arquivo relativo; faltava a visão de inadimplência consolidada e a consulta de lembretes (pedidos explícitos do usuário) → `listReceivablesOverview` e `customerReminders`.
 
 **Pendências.** Emissão/pagamento reais com API key; propagar mudança da opção de lembretes para clientes já existentes no Asaas; NF-e do boleto de pedido continua manual pela aba Vendas.
+
+
+## Cadastro de produto por tipo (2026-09-27)
+
+**Achado (usuário):** o formulário de produto mostrava os mesmos campos (código de barras, unidade, preço, NCM/CFOP/CST) para qualquer tipo, e as caixas de modalidade da loja apareciam gigantes. **Decisão:** campos por tipo conforme §22 da instrução de vendas, sem criar campos que a especificação não lista (marca, ano etc. não foram inventados); o modelo do produto fica separado da unidade física, como a própria especificação exige. Locação não mostra preço nem fiscais porque o pedido de locação não gera venda/NF-e no código atual (`completeOrder` só movimenta `RENTAL_OUT`). Campos ocultos não são limpos no envio, para não apagar dados já cadastrados. CSS: `.field input[type=checkbox]` deixa de herdar `width:100%`/`min-height:40px`.
