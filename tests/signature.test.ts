@@ -343,3 +343,14 @@ test('finalização concorrente baixa somente um par de documentos',async()=>{
  await Promise.all([syncContract(f.db,f.tenantId,c.contractId,f.deps,NOW),syncContract(f.db,f.tenantId,c.contractId,f.deps,NOW)]);
  assert.equal((await listOrderDocuments(f.db,f.tenantId,f.owner)).length,3);
 });
+
+test('recusa por papéis do modelo explica quais papéis faltam ou sobram', async () => {
+ const { friendlySignError } = await import('../lib/signature/service.ts');
+ const { AdapterSignError } = await import('../lib/signature/adapterSign.ts');
+ // Formato devolvido pelo Adapter Sign (contracts.service.ts): details { missing, unknown }.
+ const msg = friendlySignError(new AdapterSignError(422, 'VALIDATION_ERROR', 'Informe exatamente um signatário para cada papel do modelo.', 'req-1', { missing: ['comprador'], unknown: ['cliente'] }), 'contrato-moto');
+ assert.match(msg, /"loja" \(empresa, ordem 1\) e "cliente"/);
+ assert.match(msg, /sem correspondência: "comprador"/);
+ assert.match(msg, /modelo não tem: "cliente"/);
+ assert.match(msg, /código req-1/);
+});

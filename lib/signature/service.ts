@@ -116,7 +116,17 @@ async function loadContract(db: D1Database, tenantId: string, contractId: string
 export function friendlySignError(error: AdapterSignError, templateKey = ''): string {
  const ref = error.requestId ? ` (código ${error.requestId})` : '';
  switch (error.code) {
-  case 'VALIDATION_ERROR': return `O Adapter Sign recusou os dados: ${error.message}${ref}`;
+  case 'VALIDATION_ERROR': {
+   // contracts.service.ts do Adapter Sign devolve { missing, unknown } quando os papéis do modelo
+   // não batem com os enviados (o OmniHub envia sempre "loja" e "cliente").
+   const d = (error.details ?? {}) as { missing?: unknown; unknown?: unknown };
+   const list = (x: unknown) => (Array.isArray(x) ? x.filter((k): k is string => typeof k === 'string').map((k) => `"${k}"`).join(', ') : '');
+   const missing = list(d.missing), unknown = list(d.unknown);
+   const roles = missing || unknown
+    ? ` O modelo "${templateKey}" no Adapter Sign precisa ter exatamente os papéis "loja" (empresa, ordem 1) e "cliente" (ordem 2).${missing ? ` Papéis do modelo sem correspondência: ${missing}.` : ''}${unknown ? ` Papéis enviados que o modelo não tem: ${unknown}.` : ''}`
+    : '';
+   return `O Adapter Sign recusou os dados: ${error.message}${roles}${ref}`;
+  }
   case 'TEMPLATE_NOT_FOUND': return `Modelo "${templateKey}" não encontrado (ou arquivado) no Adapter Sign. Confira o identificador em Minhas lojas > Assinatura eletrônica.${ref}`;
   case 'TEMPLATE_ANCHORS_MISMATCH': return `O PDF do contrato não tem os marcadores esperados pelo modelo no Adapter Sign (papéis "loja" e "cliente"). Nada foi criado.${ref}`;
   case 'COMPANY_SIGNATURE_NOT_AUTHORIZED': return `A loja ainda não autorizou a assinatura da empresa pela integração. O proprietário precisa aceitar em Adapter Sign → Configurações → Assinatura da empresa.${ref}`;
