@@ -36,3 +36,36 @@ test('A mesma chave em tenants diferentes não interfere', async () => {
  assert.equal(a.resultId, 'result-a');
  assert.equal(b.resultId, 'result-b');
 });
+
+test('Duas requisições simultâneas com a mesma chave executam o comando uma única vez', async () => {
+ const db = createFakeD1();
+ await tenant(db, 't1');
+ let calls = 0;
+ let release!: () => void;
+ const gate = new Promise<void>((r) => { release = r; });
+ const slow = withIdempotency(db, 't1', 'key-1', 'fp', async () => { calls++; await gate; return 'result-1'; });
+ await assert.rejects(() => withIdempotency(db, 't1', 'key-1', 'fp', async () => { calls++; return 'result-2'; }), /sendo processada/);
+ release();
+ assert.equal((await slow).resultId, 'result-1');
+ assert.equal((await withIdempotency(db, 't1', 'key-1', 'fp', async () => 'x')).replayed, true);
+ assert.equal(calls, 1);
+});
+
+test('Comando que falha libera a chave para nova tentativa', async () => {
+ const db = createFakeD1();
+ await tenant(db, 't1');
+ await assert.rejects(() => withIdempotency(db, 't1', 'key-1', 'fp', async () => { throw new Error('falhou'); }), /falhou/);
+ const ok = await withIdempotency(db, 't1', 'key-1', 'fp', async () => 'result-1');
+ assert.equal(ok.replayed, false);
+ assert.equal(ok.resultId, 'result-1');
+});
+
+test('Chaves concluídas com mais de 30 dias são removidas', async () => {
+ const db = createFakeD1();
+ await tenant(db, 't1');
+ const day = 24 * 60 * 60 * 1000;
+ await withIdempotency(db, 't1', 'old', 'fp', async () => 'r', 1000);
+ await withIdempotency(db, 't1', 'new', 'fp', async () => 'r', 1000 + 31 * day + 2 * 60 * 60 * 1000);
+ const rows = await db.prepare('SELECT key FROM command_idempotency ORDER BY key').bind().all<{ key: string }>();
+ assert.deepEqual(rows.results.map((r) => r.key), ['new']);
+});

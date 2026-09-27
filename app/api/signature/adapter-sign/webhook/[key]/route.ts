@@ -1,4 +1,5 @@
 import { database } from '@/db/database';
+import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 import { receiveAdapterSignWebhook, processAdapterSignEvent } from '@/lib/signature/service';
 import { signatureDepsFromEnv } from '@/lib/signature/worker';
 import { logger } from '@/lib/log';
@@ -12,8 +13,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ key: string }> }) {
  const { key } = await params;
  try {
-  const rawBody = await request.text();
-  if (rawBody.length > 256 * 1024) return Response.json({ ok: false }, { status: 413 });
+  let rawBody: string;
+  try { rawBody = await readTextLimited(request, 256 * 1024); } catch (e) { if (e instanceof BodyTooLargeError) return Response.json({ ok: false }, { status: 413 }); throw e; }
   const db = database();
   const result = await receiveAdapterSignWebhook(db, key, {
    signature: request.headers.get('x-adapter-signature') ?? '',

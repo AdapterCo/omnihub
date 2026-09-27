@@ -1,6 +1,7 @@
 import { database } from '@/db/database';
 import { handleMercadoPagoWebhook } from '@/lib/payments/service';
 import { logger } from '@/lib/log';
+import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ key
     const url = new URL(request.url);
     let bodyDataId: string | null = null;
     try {
-        const body = (await request.json()) as { data?: { id?: unknown } };
+        const body = await readJsonLimited<{ data?: { id?: unknown } }>(request, 64 * 1024);
         bodyDataId = typeof body?.data?.id === 'string' ? body.data.id : null;
     } catch {
         bodyDataId = null;

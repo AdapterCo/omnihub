@@ -1,4 +1,4 @@
-import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { RuleError } from '../errors.ts';
 import { LOGIN_EMAIL_RULE, LOGIN_IP_RULE, REGISTER_IP_RULE, assertNotLocked, purgeExpiredAuthData, recordHit, resetBucket } from './rateLimit.ts';
 
@@ -52,10 +52,17 @@ export function validatePasswordStrength(password: string): void {
 
 export type SessionUser = { userId: string; displayName: string; email: string };
 
+// O banco guarda só o SHA-256 do token (o cookie leva o token). Um vazamento do banco ou de um
+// backup não permite assumir sessões. Sessões gravadas antes desta mudança deixam de valer
+// (o usuário entra de novo uma vez).
+export function sessionTokenHash(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+}
+
 export async function createSession(db: D1Database, userId: string, now = Date.now()): Promise<{ token: string; expiresAt: number }> {
     const token = randomBytes(32).toString('hex');
     const expiresAt = now + SESSION_TTL_MS;
-    await db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').bind(token, userId, expiresAt, now).run();
+    await db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)').bind(sessionTokenHash(token), userId, expiresAt, now).run();
     return { token, expiresAt };
 }
 
@@ -67,18 +74,18 @@ export async function getSessionUser(db: D1Database, token: string | undefined, 
              FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.token = ?`,
         )
-        .bind(token)
+        .bind(sessionTokenHash(token))
         .first<{ userId: string; displayName: string; email: string | null; expiresAt: number }>();
     if (!row) return null;
     if (Number(row.expiresAt) < now) {
-        await db.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+        await db.prepare('DELETE FROM sessions WHERE token = ?').bind(sessionTokenHash(token)).run();
         return null;
     }
     return { userId: row.userId, displayName: row.displayName, email: row.email ?? '' };
 }
 
 export async function deleteSession(db: D1Database, token: string): Promise<void> {
-    await db.prepare('DELETE FROM sessions WHERE token = ?').bind(token).run();
+    await db.prepare('DELETE FROM sessions WHERE token = ?').bind(sessionTokenHash(token)).run();
 }
 
 /**
@@ -114,7 +121,7 @@ export async function registerAccount(
         db.prepare('INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES (?,?,?,0,?,?,3,?)').bind(accountId, accountName, '{}', 'trial', now + 7 * 24 * 60 * 60 * 1000, now),
         db.prepare('INSERT INTO memberships (user_id,account_id,role,store_id,display_name) VALUES (?,?,?,NULL,?)').bind(userId, accountId, 'admin', displayName),
         db.prepare('INSERT INTO user_tenant_roles (id,user_id,tenant_id,role_id) VALUES (?,?,?,?)').bind(crypto.randomUUID(), userId, accountId, ownerRole.id),
-        db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)').bind(token, userId, expiresAt, now),
+        db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)').bind(sessionTokenHash(token), userId, expiresAt, now),
     ]);
 
     return { userId, accountId, token, expiresAt };

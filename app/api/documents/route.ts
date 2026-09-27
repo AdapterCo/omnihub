@@ -17,8 +17,12 @@ export async function POST(request: Request) {
   const session = await resolveWorkspaceSession();
   if (!session) return reply({ error: 'Sessão encerrada. Entre novamente.', signIn: true }, 401);
   requireActive(session.plan, Date.now());
-  const length = Number(request.headers.get('content-length') ?? 0);
-  if (length > MAX_UPLOAD_BYTES + 64 * 1024) return reply({ error: 'Arquivo maior que 10 MB.' }, 413);
+  // formData() lê tudo para a memória: sem tamanho declarado (envio em partes) não dá para
+  // conferir antes. O navegador sempre declara o tamanho no envio de formulário.
+  const lengthHeader = request.headers.get('content-length');
+  if (!lengthHeader) return reply({ error: 'Tamanho do envio não informado.' }, 411);
+  const length = Number(lengthHeader);
+  if (!Number.isFinite(length) || length > MAX_UPLOAD_BYTES + 64 * 1024) return reply({ error: 'Arquivo maior que 10 MB.' }, 413);
   const form = await request.formData();
   const file = form.get('file');
   const orderId = String(form.get('orderId') ?? '');

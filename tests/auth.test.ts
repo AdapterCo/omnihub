@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createFakeD1 } from './helpers/fakeD1.ts';
-import { hashPassword, verifyPassword, registerAccount, loginWithPassword, guardedLogin, guardedRegister, isRegistrationEnabled, getSessionUser, deleteSession, MAX_PASSWORD_LENGTH } from '../lib/auth/service.ts';
+import { hashPassword, verifyPassword, registerAccount, loginWithPassword, guardedLogin, guardedRegister, isRegistrationEnabled, getSessionUser, deleteSession, MAX_PASSWORD_LENGTH, sessionTokenHash } from '../lib/auth/service.ts';
 import { purgeExpiredAuthData } from '../lib/auth/rateLimit.ts';
 import { clientIp } from '../lib/http/clientIp.ts';
 
@@ -107,7 +107,17 @@ test('purgeExpiredAuthData remove sessões vencidas e contadores antigos, preser
  const fresh = await loginWithPassword(db, 'maria@empresa.com', input.password, old.expiresAt + 5000);
  await purgeExpiredAuthData(db, old.expiresAt + 6000);
  const rows = await db.prepare('SELECT token FROM sessions').bind().all<{ token: string }>();
- assert.deepEqual(rows.results.map((r) => r.token), [fresh.token]);
+ assert.deepEqual(rows.results.map((r) => r.token), [sessionTokenHash(fresh.token)]);
+});
+
+test('sessão: o banco guarda só o hash do token; o token puro do banco não abre sessão', async () => {
+ const db = createFakeD1();
+ const reg = await registerAccount(db, input, 1000);
+ const row = await db.prepare('SELECT token FROM sessions').bind().first<{ token: string }>();
+ assert.notEqual(row!.token, reg.token);
+ assert.equal(row!.token, sessionTokenHash(reg.token));
+ assert.equal((await getSessionUser(db, reg.token, 2000))?.userId, reg.userId);
+ assert.equal(await getSessionUser(db, row!.token, 2000), null);
 });
 
 test('clientIp: usa o item do fim de x-forwarded-for (proxy confiável), nunca o primeiro forjável', () => {

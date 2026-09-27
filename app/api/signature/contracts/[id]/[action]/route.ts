@@ -6,6 +6,7 @@ import { sendContractForSignature, newSigningLink, cancelSignature, refreshContr
 import { signatureDepsFromEnv } from '@/lib/signature/worker';
 import { recordAudit } from '@/lib/audit/service';
 import { logger } from '@/lib/log';
+import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 
 export const dynamic = 'force-dynamic';
 const reply = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
@@ -40,13 +41,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
    return reply(link);
   }
   if (action === 'cancel') {
-   const body = (await request.json().catch(() => ({}))) as { reason?: string };
+   const body = (await readJsonLimited<{ reason?: string }>(request, 8 * 1024)) ?? {};
    await cancelSignature(db, tenantId, id, String(body.reason ?? ''), actor, signatureDepsFromEnv());
    await audit(`Assinatura cancelada no Adapter Sign: ${String(body.reason ?? '').trim()}`);
    return reply({ ok: true });
   }
   return reply({ error: 'Ação inválida.' }, 404);
  } catch (error) {
+  if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
   if (error instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('signature.acao.erro', { requestId, error });

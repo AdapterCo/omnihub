@@ -1,5 +1,6 @@
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
+import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 import { guardedRegister } from '@/lib/auth/service';
 import { clientIp } from '@/lib/http/clientIp';
 import { logger, pseudonym } from '@/lib/log';
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
     const requestId = crypto.randomUUID();
     try {
         if (!isSameOrigin(request)) return reply({ error: 'Origem da solicitação inválida.' }, 403);
-        const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+        const body = await readJsonLimited<Record<string, unknown>>(request, 8 * 1024);
         if (!body || typeof body.accountName !== 'string' || typeof body.displayName !== 'string' || typeof body.email !== 'string' || typeof body.password !== 'string') {
             return reply({ error: 'Informe nome da conta, seu nome, e-mail e senha.' }, 400);
         }
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
         res.headers.append('Set-Cookie', sessionCookieHeader(token, expiresAt));
         return res;
     } catch (error) {
+        if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
         if (error instanceof RuleError) {
             if (error.status === 429 || error.status === 403) logger.warn('auth.cadastro.recusado', { requestId, status: error.status, ip: clientIp(request.headers) });
             return reply({ error: error.message }, error.status);

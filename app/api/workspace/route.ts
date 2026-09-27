@@ -25,6 +25,7 @@ import { getFiscalJobsSummary } from '@/lib/fiscal/queue';
 import { clientIp } from '@/lib/http/clientIp';
 import { logger } from '@/lib/log';
 import { withIdempotency } from '@/lib/idempotency';
+import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 import { dispatchCommand } from '@/lib/relationalCommands';
 export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store'};
@@ -40,9 +41,11 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  const canViewCustomers=actor.permissions.has('CUSTOMER_VIEW');
  const canViewSuppliers=actor.permissions.has('SUPPLIER_VIEW');
  const canViewFiscal=actor.permissions.has('FISCAL_VIEW');
+ // Auditoria traz IP, antes/depois e ações de toda a equipe: só para quem tem AUDIT_VIEW.
+ const canViewAudit=actor.permissions.has('AUDIT_VIEW');
  const [stores,products,stock,transfers,cash,sales,relationalAudit,users,customers,suppliers]=await Promise.all([
   listStores(db,tenantId),listProductsForSnapshot(db,tenantId),listStockMapForTenant(db,tenantId),listTransfersForSnapshot(db,tenantId),
-  listSessionsForSnapshot(db,tenantId),listSalesForSnapshot(db,tenantId),listAudit(db,tenantId),
+  listSessionsForSnapshot(db,tenantId),listSalesForSnapshot(db,tenantId),canViewAudit?listAudit(db,tenantId):Promise.resolve([]),
   canViewUsers?listTenantUsers(db,tenantId,actor):Promise.resolve([]),
   canViewCustomers?listCustomers(db,tenantId,actor):Promise.resolve([]),
   canViewSuppliers?listSuppliers(db,tenantId,actor):Promise.resolve([]),
@@ -139,7 +142,7 @@ export async function POST(request:Request){
   if(!isSameOrigin(request))return reply({error:'Origem da solicitação inválida.'},403);
   const user=await getCurrentUser();if(!user)return reply({error:'Sessão encerrada. Entre novamente.',signIn:true},401);
   if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'Formato inválido.'},415);
-  const raw=await request.text();if(raw.length>262144)return reply({error:'Solicitação muito grande.'},413);let body;try{body=JSON.parse(raw)}catch{return reply({error:'Solicitação inválida.'},400)}
+  let raw:string;try{raw=await readTextLimited(request,262144)}catch(e){if(e instanceof BodyTooLargeError)return reply({error:'Solicitação muito grande.'},413);throw e}let body;try{body=JSON.parse(raw)}catch{return reply({error:'Solicitação inválida.'},400)}
   if(!body||typeof body!=='object')return reply({error:'Solicitação inválida.'},400);
   let row=await account(user.userId);
   if(!row)return reply({error:'Crie sua conta para continuar.'},403);
