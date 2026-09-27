@@ -19,7 +19,9 @@ mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%d-%H%M%S)"
 tmp="$BACKUP_DIR/.omnihub-$stamp.dump.tmp"
 final="$BACKUP_DIR/omnihub-$stamp.dump"
-trap 'rm -f "$tmp"' EXIT
+files_tmp="$BACKUP_DIR/.omnihub-$stamp.files.tar.gz.tmp"
+files_final="$BACKUP_DIR/omnihub-$stamp.files.tar.gz"
+trap 'rm -f "$tmp" "$files_tmp"' EXIT
 
 if ! pg_dump --format=custom --no-owner --file="$tmp"; then
     log error backup.dump_falhou "pg_dump retornou erro"
@@ -31,7 +33,21 @@ if [ ! -s "$tmp" ] || ! pg_restore --list "$tmp" >/dev/null 2>&1; then
 fi
 
 chmod 600 "$tmp"
+# O dump vem primeiro: arquivos são imutáveis e exclusões são lógicas, portanto a cópia
+# posterior inclui os objetos referenciados pelo snapshot do banco. Novos objetos extras
+# não comprometem a restauração. Não publicar backup completo se o tar falhar.
+if [ -n "${STORAGE_DIR:-}" ]; then
+    [ -d "$STORAGE_DIR" ] || { log error backup.storage_ausente "STORAGE_DIR nao existe"; exit 1; }
+    # Nome do arquivo relativo ao BACKUP_DIR: o tar interpreta "C:/..." como host remoto.
+    (cd "$BACKUP_DIR" && tar -czf "$(basename "$files_tmp")" -C "$STORAGE_DIR" . && tar -tzf "$(basename "$files_tmp")" >/dev/null)
+    chmod 600 "$files_tmp"
+    mv "$files_tmp" "$files_final"
+fi
 mv "$tmp" "$final"
+if [ -n "${STORAGE_DIR:-}" ]; then
+    (cd "$BACKUP_DIR" && sha256sum "omnihub-$stamp.dump" "omnihub-$stamp.files.tar.gz") > "$BACKUP_DIR/omnihub-$stamp.sha256"
+    chmod 600 "$BACKUP_DIR/omnihub-$stamp.sha256"
+fi
 printf '%s\n' "$stamp" > "$BACKUP_DIR/latest.ok"
 size="$(wc -c < "$final" | tr -d ' ')"
 log info backup.ok "arquivo=$(basename "$final") bytes=$size"
@@ -44,6 +60,7 @@ for file in $(ls -1t "$BACKUP_DIR"/omnihub-*.dump 2>/dev/null); do
     [ "$index" -le "$KEEP_MIN" ] && continue
     if [ -n "$(find "$file" -mtime +"$RETENTION_DAYS" 2>/dev/null)" ]; then
         rm -f "$file"
+        rm -f "${file%.dump}.files.tar.gz" "${file%.dump}.sha256"
         log info backup.removido_por_retencao "arquivo=$(basename "$file")"
     fi
 done

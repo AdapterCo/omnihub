@@ -17,7 +17,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const ADAPTER_SIGN_API = 'https://sign.adapterco.com.br/api/v1';
 
-export type SignFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string | FormData }) => Promise<{ status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }>;
+export type SignFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string | FormData; signal?: AbortSignal; redirect?: RequestRedirect }) => Promise<{ status: number; text(): Promise<string>; arrayBuffer(): Promise<ArrayBuffer> }>;
 
 export class AdapterSignError extends Error {
  readonly status: number;
@@ -63,7 +63,7 @@ export class AdapterSignClient {
   const headers: Record<string, string> = { Authorization: `Bearer ${this.apiKey}`, Accept: 'application/json', ...extraHeaders };
   if (typeof body === 'string') headers['Content-Type'] = 'application/json';
   try {
-   return await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body });
+   return await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body, signal: AbortSignal.timeout(30_000), redirect: 'error' });
   } catch {
    throw new AdapterSignError(0, 'NETWORK', 'Não foi possível falar com o Adapter Sign (rede).');
   }
@@ -73,13 +73,13 @@ export class AdapterSignClient {
   const text = await res.text();
   let parsed: unknown = null;
   try { parsed = text ? JSON.parse(text) : null; } catch { parsed = null; }
-  if (res.status >= 200 && res.status < 300) return parsed as T;
+  if (res.status >= 200 && res.status < 300 && parsed && typeof parsed === 'object') return parsed as T;
   const raw = (parsed as { error?: unknown } | null)?.error;
   // Formato de erro da API: { error: { code, message, request_id } }. Qualquer outra coisa (página
   // HTML, { "error": "Not found" } do front-end web) significa que a API não respondeu nesse
   // endereço (fora do ar ou endereço errado) — nada foi processado pelo Adapter Sign.
   const err = raw && typeof raw === 'object' && typeof (raw as { code?: unknown }).code === 'string' ? (raw as { code: string; message?: string; request_id?: string; details?: unknown }) : null;
-  if (!err) throw new AdapterSignError(res.status, `HTTP_${res.status}`, `O Adapter Sign não respondeu como API no endereço ${this.baseUrl} (HTTP ${res.status}). Confira se o serviço está no ar e se o endereço (ADAPTER_SIGN_BASE_URL) está correto. Nada foi enviado.`);
+  if (!err) throw new AdapterSignError(0, 'INVALID_RESPONSE', `O Adapter Sign não respondeu como API (HTTP ${res.status}). Confira o endereço ADAPTER_SIGN_BASE_URL e o serviço. O resultado do envio é desconhecido; a mesma referência será preservada.`);
   throw new AdapterSignError(res.status, err.code ?? `HTTP_${res.status}`, err.message ?? `Adapter Sign respondeu HTTP ${res.status}.`, err.request_id ?? '', err.details ?? null);
  }
 
@@ -87,7 +87,11 @@ export class AdapterSignClient {
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(pdf)], { type: 'application/pdf' }), filename);
   form.append('data', JSON.stringify(data));
-  return this.json<SentEnvelope>(await this.call('POST', '/envelopes/from-template', form));
+  const sent = await this.json<SentEnvelope>(await this.call('POST', '/envelopes/from-template', form));
+  if (!sent.id || sent.externalRef !== data.externalRef || !Array.isArray(sent.documents) || !sent.documents[0]?.id || !Array.isArray(sent.signers) || !['loja', 'cliente'].every(role => sent.signers.some(s => s.role === role && s.id))) {
+   throw new AdapterSignError(0, 'INVALID_RESPONSE', 'Resposta de envio incompleta ou referente a outro contrato. A referência original será preservada para reconciliação.');
+  }
+  return sent;
  }
 
  async issueLink(envelopeId: string, signerId: string): Promise<{ signerId: string; signingUrl: string; expiresAt: string }> {

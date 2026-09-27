@@ -110,6 +110,14 @@ Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 - No Adapter Sign: modelos com os papéis `loja` (representa a empresa, ordem 1) e `cliente` (ordem 2); o **proprietário** aceita a autorização em Configurações → Assinatura da empresa.
 - `ADAPTER_SIGN_BASE_URL` (padrão `https://sign.adapterco.com.br/api/v1`) e `SIGNATURE_WORKER_INTERVAL_MS` (padrão 60000; 0 desliga) são opcionais.
 
+### Boletos (Asaas)
+
+- No pedido finalizado, **Boletos → Configurar Asaas da loja**: ambiente (Sandbox ou Produção), API key e um token de webhook próprio (32+ caracteres), guardados cifrados. Cadastre no Asaas o webhook com a URL exibida e o mesmo token, com os eventos de cobrança.
+- **Preparar prévia** gera as parcelas (moto) ou as 12 mensalidades (locação) para revisão; cada boleto é emitido com **Emitir boleto**.
+- **Pedidos → Boletos e inadimplência** mostra vencidos, inadimplentes, em aberto e recebidos, e os lembretes ativos de cada cliente no Asaas (os envios em si são feitos e registrados pelo Asaas).
+- `BILLING_WORKER_INTERVAL_MS` (padrão 60000; 0 desliga) controla a conferência automática.
+- Cópia externa dos backups: `BACKUP_REMOTE=<remoto rclone> sh scripts/backup/offsite.sh` (não apaga histórico remoto).
+
 ## Próxima etapa
 
 1. Definir o provedor de cobrança, planos, valores e política de renovação; implementar ciclo completo com eventos autenticados, repetição segura e conciliação.

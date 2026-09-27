@@ -42,3 +42,5 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+# Saída temporária dos testes e scripts locais
+tmp/

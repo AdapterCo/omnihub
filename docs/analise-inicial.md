@@ -540,3 +540,14 @@ Implementado a partir da lista de melhorias da auditoria anterior: rate limit de
 **Achado no serviço real.** Em 2026-09-26, todo `/api/v1/*` em `sign.adapterco.com.br` responde `{"error":"Not found"}` (POST) ou HTML (GET), inclusive `auth/me` e `/api/docs/openapi.json`: é o front-end web respondendo, a API não está publicada/roteada nesse domínio. O cliente passou a reconhecer respostas fora do formato `{ error: { code, message } }` como "API não respondeu nesse endereço" — nada é enviado e o contrato volta a GENERATED com essa explicação.
 
 **Pendências.** Envio real depende de: API do Adapter Sign no ar no endereço configurado; modelos `loja`(empresa, ordem 1)/`cliente` criados; API key com acesso à API; webhook cadastrado com a URL da loja e o segredo salvo no OmniHub; autorização da assinatura da empresa aceita pelo proprietário. Rubricas por página continuam opcionais (não usadas).
+
+
+## Vendas com contrato e locação — fase 6: boletos Asaas e inadimplência (2026-09-26)
+
+**Origem.** Implementação adiantada pelo Codex a pedido do usuário e revisada nesta sessão: contratos da API conferidos na referência oficial (`docs.asaas.com/reference`: `retrieve-a-single-payment` para o enum de status, `retrieve-notifications-from-a-customer` para os lembretes).
+
+**Decisões.** (1) POST `/payments` não é idempotente: antes de criar, consulta por `externalReference`; falha incerta marca `UNCERTAIN` e nunca reenvia sozinha. (2) Status só muda por consulta autenticada; o webhook (token `asaas-access-token`, comparação em tempo constante) apenas registra o evento. (3) Conciliação bloqueia se referência, cliente, valor original ou vencimento divergirem. (4) Pago = `RECEIVED`, `CONFIRMED`, `RECEIVED_IN_CASH`, `DUNNING_RECEIVED`. (5) Multa/juros: locação usa 2%/1% a.m. do contrato v1; moto exige que o vendedor informe (zero explícito se não houver) — nenhum percentual presumido. (6) Ambiente SANDBOX/PRODUCTION escolhido na configuração, sem padrão; troca bloqueada se já houver cobranças. (7) Lembretes: o Asaas envia; a API expõe só a configuração por cliente (evento, canais, antecedência), não o histórico de envios — a tela diz isso em vez de simular um "enviado".
+
+**Correções da revisão.** Webhook respondia 400 para eventos sem cobrança (o Asaas penaliza a fila da conta inteira com respostas de erro) → agora 200 e ignora; `RECEIVED_IN_CASH`/`DUNNING_RECEIVED` não contavam como pago; comentário apontava para `docs/asaas.md` inexistente; teste de backup falhava no Windows (o `tar` lê `C:/...` como host remoto) → nome do arquivo relativo; faltava a visão de inadimplência consolidada e a consulta de lembretes (pedidos explícitos do usuário) → `listReceivablesOverview` e `customerReminders`.
+
+**Pendências.** Emissão/pagamento reais com API key; propagar mudança da opção de lembretes para clientes já existentes no Asaas; NF-e do boleto de pedido continua manual pela aba Vendas.

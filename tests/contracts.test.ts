@@ -15,11 +15,21 @@ import { uploadOrderDocument, readDocument, deleteDocument, listOrderDocuments, 
 import { createLocalStorage, storageFromEnv, assertSafeKey } from '../lib/storage/index.ts';
 import { dispatchCommand } from '../lib/relationalCommands.ts';
 import type { Actor } from '../lib/domain.ts';
+import { renderContractPdf } from '../lib/contracts/pdf.ts';
 
 const PASSWORD = 'senha-forte-123';
 const plan = { status: 'active', accessUntil: 9_999_999_999_999, maxStores: 3 };
 // "Agora" do teste: 2026-09-26 12:00 em São Paulo.
 const NOW = Date.UTC(2026, 8, 26, 15, 0, 0);
+
+test('rubricas configuráveis: uma âncora de texto por página e nenhuma quando desativadas',async()=>{
+ // Dados MOCK usados apenas para inspecionar o renderizador, nunca enviados à integração.
+ const template=TEMPLATES[1],values=Object.fromEntries(placeholdersOf(template).map(k=>[k,'DADO DE TESTE']));
+ const enabled=await pdfText(await renderContractPdf(template,values,{title:'TESTE de rubricas',now:NOW,clientInitials:true}));
+ assert.equal(enabled.text.split('[[AS:rubrica:cliente]]').length-1,enabled.pages);
+ const disabled=await pdfText(await renderContractPdf(template,values,{title:'TESTE sem rubricas',now:NOW}));
+ assert.ok(!disabled.text.includes('[[AS:rubrica:cliente]]'));
+});
 
 /** Extrai o texto do PDF como o Adapter Sign faria (pdfjs), página a página. */
 async function pdfText(bytes: Uint8Array): Promise<{ text: string; pages: number }> {

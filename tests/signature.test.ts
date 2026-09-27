@@ -308,15 +308,15 @@ test('cancelamento e expiração liberam o pedido e permitem nova revisão com o
     assert.match(r3.externalRef, /-r3$/);
 });
 
-test('serviço fora do ar (página HTML 404): mensagem clara, nada enviado, contrato volta para reenviar', async () => {
+test('serviço fora do ar (página HTML 404): resultado incerto preserva referência', async () => {
     const f = await fixture();
     const c = await f.newContract();
     // MOCK: simula o domínio respondendo uma página HTML genérica (serviço fora do ar/endereço errado).
     const htmlFetch: SignFetch = async () => ({ status: 404, text: async () => '<!DOCTYPE html><html><body>404</body></html>', arrayBuffer: async () => new ArrayBuffer(0) });
-    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, { ...f.deps, fetch: htmlFetch }, NOW), /não respondeu como API no endereço https:\/\/sign\.exemplo\.test\/api\/v1 \(HTTP 404\)/);
+    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, { ...f.deps, fetch: htmlFetch }, NOW), /não respondeu como API \(HTTP 404\)/);
     const contract = await f.contract(c.contractId);
-    assert.equal(contract.status, 'GENERATED');
-    assert.match(contract.lastError, /Nada foi enviado/);
+    assert.equal(contract.status, 'SENDING');
+    assert.match(contract.lastError, /resultado do envio é desconhecido/);
 });
 
 test('front-end respondendo {"error":"Not found"} em vez da API: tratado como API fora do ar', async () => {
@@ -325,5 +325,21 @@ test('front-end respondendo {"error":"Not found"} em vez da API: tratado como AP
     // MOCK: formato observado em 2026-09-26 no domínio real quando a API não está roteada.
     const webFetch: SignFetch = async () => ({ status: 404, text: async () => '{"error":"Not found"}', arrayBuffer: async () => new ArrayBuffer(0) });
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, { ...f.deps, fetch: webFetch }, NOW), /não respondeu como API/);
-    assert.equal((await f.contract(c.contractId)).status, 'GENERATED');
+    assert.equal((await f.contract(c.contractId)).status, 'SENDING');
+});
+
+test('HTTP 200 com HTML não libera o contrato nem permite criar nova revisão',async()=>{
+ const f=await fixture(),c=await f.newContract();
+ // MOCK EXPLÍCITO de proxy que retorna HTML com HTTP 200.
+ const fetch:SignFetch=async()=>({status:200,text:async()=>'<html>indisponível</html>',arrayBuffer:async()=>new ArrayBuffer(0)});
+ await assert.rejects(()=>sendContractForSignature(f.db,f.tenantId,c.contractId,f.seller,{...f.deps,fetch},NOW),/resultado do envio é desconhecido/);
+ assert.equal((await f.contract(c.contractId)).status,'SENDING');
+ await assert.rejects(()=>generateContract(f.db,f.storage,f.tenantId,c.orderId,f.seller,NOW),/enviado/);
+});
+
+test('finalização concorrente baixa somente um par de documentos',async()=>{
+ const f=await fixture(),c=await f.newContract();await sendContractForSignature(f.db,f.tenantId,c.contractId,f.seller,f.deps,NOW);
+ const env=[...f.mock.envelopes.values()][0];f.mock.complete(env.id);
+ await Promise.all([syncContract(f.db,f.tenantId,c.contractId,f.deps,NOW),syncContract(f.db,f.tenantId,c.contractId,f.deps,NOW)]);
+ assert.equal((await listOrderDocuments(f.db,f.tenantId,f.owner)).length,3);
 });

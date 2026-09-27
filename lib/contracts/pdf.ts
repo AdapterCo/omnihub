@@ -169,7 +169,7 @@ function assertEncodable(fonts: Fonts, values: Record<string, string>, labels: R
  if (bad.length) throw new RuleError(`Não foi possível gerar o contrato: há caracteres não suportados em ${bad.join(', ')}. Corrija o cadastro (emojis e símbolos especiais não são aceitos).`, 400);
 }
 
-export async function renderContractPdf(template: ContractTemplate, values: Record<string, string>, meta: { title: string; now: number }): Promise<Uint8Array> {
+export async function renderContractPdf(template: ContractTemplate, values: Record<string, string>, meta: { title: string; now: number; clientInitials?: boolean }): Promise<Uint8Array> {
  const doc = await PDFDocument.create();
  const fonts: Fonts = {
   regular: await doc.embedFont(StandardFonts.Helvetica),
@@ -211,6 +211,12 @@ export async function renderContractPdf(template: ContractTemplate, values: Reco
    const label = String(i + 1);
    page.drawText(label, { x: PAGE.width - MARGIN.right - fonts.regular.widthOfTextAtSize(label, 9), y: MARGIN.bottom / 2, size: 9, font: fonts.regular, color: BLACK });
   });
+ }
+ if(meta.clientInitials) {
+  for(const page of w.pages) {
+   // Área reservada do rodapé, fora do texto e da numeração. Âncora real por página.
+   page.drawText('[[AS:rubrica:cliente]]',{x:MARGIN.left,y:40,size:MARKER_SIZE,font:fonts.regular,color:WHITE});
+  }
  }
  return doc.save({ useObjectStreams: false });
 }

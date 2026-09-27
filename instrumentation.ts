@@ -13,4 +13,6 @@ export async function register() {
     // Reconciliação das assinaturas do Adapter Sign (webhook perdido, envio com resultado incerto).
     const { startSignatureWorker } = await import('./lib/signature/worker');
     if (startSignatureWorker(database())) logger.info('signature-worker.iniciado');
+    const { startBillingWorker } = await import('./lib/billing/worker');
+    if (startBillingWorker(database())) logger.info('billing-worker.iniciado');
 }

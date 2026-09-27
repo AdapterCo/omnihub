@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
 import { money, date, type Snapshot, type OrderView, type UnitView, type StoreRecord, type ContractView, type DocumentView } from '@/lib/domain';
+import { OrderBilling, BillingOverview } from './order-billing';
 
 // Aba Pedidos (venda com contrato de moto e locação) e painel de unidades com chassi/IMEI.
 // Toda regra fica no backend (lib/orders/service.ts); a tela só coleta e mostra os dados.
@@ -71,6 +72,7 @@ export function OrdersPage({ data, act, stores, storeFilter, busy, active, refre
    <input className="search-input" placeholder="Buscar por número, cliente, chassi/IMEI ou vendedor" value={search} onChange={(e) => setSearch(e.target.value)} />
    {perms.has('ORDER_CREATE') && <Button disabled={!active || busy || !orderStores.length} onClick={() => setEditing('new')}><Plus /> Novo pedido</Button>}
   </div>
+  {perms.has('ORDER_VIEW') && orderStores.length > 0 && <BillingOverview onOpenOrder={(id) => { setEditing(null); setViewing(id); }} />}
   {!orderStores.length && <div className="notice">Nenhuma loja tem as modalidades Venda com contrato ou Locação. Habilite em Minhas lojas &gt; Editar.</div>}
   <section className="panel">
    {list.length ? <div className="table-pad"><Table><TableHeader><TableRow>{['Pedido', 'Cliente', 'Produto / unidade', 'Condições', 'Status', 'Ação'].map((h) => <TableHead key={h}>{h}</TableHead>)}</TableRow></TableHeader>
@@ -179,6 +181,7 @@ function OrderDetail({ order, contracts, documents, act, refresh, perms, busy, a
    <div className="order-summary">{rows.map(([k, val]) => <div key={k}><span className="muted">{k}</span><strong>{val}</strong></div>)}</div>
    <ContractSection order={order} contracts={contracts} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
    <DocumentsSection order={order} documents={documents} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
+   <OrderBilling order={order} perms={perms} active={active} refresh={refresh} />
    <section><h3 className="section-title"><MessageSquare size={16} /> Observações</h3>
     {order.notes.length ? order.notes.map((n) => <div key={n.id} className="note"><div className="muted">{n.author} · {date(n.createdAt)}</div><p>{n.text}</p></div>) : <p className="muted">Nenhuma observação.</p>}
     {perms.has('ORDER_VIEW') && <form className="inline" style={{ gap: 8, marginTop: 8 }} onSubmit={async (e) => { e.preventDefault(); if (!note.trim()) return; if (await act({ type: 'order.note', id: order.id, text: note.trim() })) setNote(''); }}>
@@ -358,6 +361,8 @@ export function UnitsPanel({ data, act, stores, storeFilter, busy, active }: { d
  */
 export function SignatureConfigDialog({ data, store, act, busy, onClose }: { data: Snapshot; store: StoreRecord; act: Act; busy: boolean; onClose: () => void }) {
  const summary = data.state.signatureConfigs?.[store.id];
+ const [motoInitials,setMotoInitials]=useState(summary?.motoInitials??false);
+ const [locacaoInitials,setLocacaoInitials]=useState(summary?.locacaoInitials??false);
  const [v, setV] = useState<Values>({ apiKey: '', webhookSecret: '', motoTemplate: summary?.motoTemplate ?? '', locacaoTemplate: summary?.locacaoTemplate ?? '' });
  const [copied, setCopied] = useState(false);
  const set = (k: string, value: string) => setV((p) => ({ ...p, [k]: value }));
@@ -366,7 +371,7 @@ export function SignatureConfigDialog({ data, store, act, busy, onClose }: { dat
  const usesRent = store.modalities?.includes('LOCACAO');
  const submit = async (e: FormEvent) => {
   e.preventDefault();
-  const ok = await act({ type: 'signature.config.save', storeId: store.id, apiKey: v.apiKey.trim() || undefined, webhookSecret: v.webhookSecret.trim() || undefined, motoTemplate: v.motoTemplate.trim(), locacaoTemplate: v.locacaoTemplate.trim() });
+  const ok = await act({ type: 'signature.config.save', storeId: store.id, apiKey: v.apiKey.trim() || undefined, webhookSecret: v.webhookSecret.trim() || undefined, motoTemplate: v.motoTemplate.trim(), locacaoTemplate: v.locacaoTemplate.trim(),motoInitials,locacaoInitials });
   if (ok) set('apiKey', ''), set('webhookSecret', '');
  };
  return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Assinatura eletrônica · {store.name}</DialogTitle><DialogDescription>Integração com o Adapter Sign. Cada loja usa a organização dela no Adapter Sign (plano, modelos, API key e webhook próprios).</DialogDescription></DialogHeader>
@@ -379,6 +384,9 @@ export function SignatureConfigDialog({ data, store, act, busy, onClose }: { dat
    <Field label={summary?.hasWebhookSecret ? 'Segredo do webhook (em branco mantém o salvo)' : 'Segredo do webhook (whsec_...)'} full hint="Adapter Sign → Configurações → Webhooks, ao cadastrar a URL abaixo."><input type="password" autoComplete="off" value={v.webhookSecret} onChange={(e) => set('webhookSecret', e.target.value)} /></Field>
    {usesSale && <Field label="Identificador do modelo de venda (moto) no Adapter Sign" hint="Ex.: o identificador que você criou em Modelos (papéis loja e cliente)."><input value={v.motoTemplate} maxLength={60} onChange={(e) => set('motoTemplate', e.target.value)} /></Field>}
    {usesRent && <Field label="Identificador do modelo de locação no Adapter Sign"><input value={v.locacaoTemplate} maxLength={60} onChange={(e) => set('locacaoTemplate', e.target.value)} /></Field>}
+   {usesSale&&<label><input type="checkbox" checked={motoInitials} onChange={e=>setMotoInitials(e.target.checked)}/> Rubrica do cliente em cada página — moto</label>}
+   {usesRent&&<label><input type="checkbox" checked={locacaoInitials} onChange={e=>setLocacaoInitials(e.target.checked)}/> Rubrica do cliente em cada página — locação</label>}
+   <p className="muted full">Rubricas valem para novos PDFs. Documentos existentes permanecem inalterados; confira os campos no teste de modelo do Adapter Sign.</p>
    {!usesSale && !usesRent && <p className="notice full">Esta loja não tem as modalidades Venda com contrato ou Locação: não há contratos para assinar.</p>}
    {webhookUrl && <div className="field full">URL do webhook (cadastre no Adapter Sign com os eventos signer.signed, signer.declined, envelope.completed, envelope.expired e envelope.cancelled)
     <div className="inline" style={{ gap: 6 }}><input className="search-input" readOnly value={webhookUrl} onFocus={(e) => e.currentTarget.select()} /><Button type="button" size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(webhookUrl); setCopied(true); } catch { setCopied(false); } }}>{copied ? 'Copiado' : 'Copiar'}</Button></div></div>}

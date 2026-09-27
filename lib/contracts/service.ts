@@ -137,7 +137,9 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  const revision = Number(count?.n ?? 0) + 1;
  const externalRef = `pedido-${src.order.number}-${template.key}-v${template.version}-r${revision}`;
  const title = `${template.orderType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${src.order.number} - ${values['cliente.nome']}`;
- const pdf = await renderContractPdf(template, values, { title, now });
+ const rendering=await db.prepare('SELECT moto_initials AS moto,locacao_initials AS locacao FROM signature_configs WHERE tenant_id=? AND store_id=?').bind(tenantId,src.store.id).first<{moto:number;locacao:number}>();
+ const clientInitials=!!(template.orderType==='VENDA'?rendering?.moto:rendering?.locacao);
+ const pdf = await renderContractPdf(template, values, { title, now, clientInitials });
  const contractId = crypto.randomUUID();
  const doc = await storeDocument(db, storage, tenantId, {
   storeId: src.order.storeId, customerId: src.order.customerId, orderId, contractId, type: 'CONTRATO_ORIGINAL',
@@ -145,7 +147,7 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
   originalFilename: `${externalRef}.pdf`, bytes: pdf, source: 'system',
  }, actor, now);
  // Snapshot obrigatório (§8): o contrato não muda se o cadastro mudar depois.
- const snapshot = JSON.stringify({ template: { key: template.key, version: template.version }, order: { id: orderId, number: src.order.number, type: src.order.type }, storeId: src.store.id, values, generatedAt: now });
+ const snapshot = JSON.stringify({ template: { key: template.key, version: template.version }, rendering:{clientInitials}, order: { id: orderId, number: src.order.number, type: src.order.type }, storeId: src.store.id, values, generatedAt: now });
  await db.batch([
   db.prepare("UPDATE contracts SET internal_status = 'SUPERSEDED', updated_at = ? WHERE tenant_id = ? AND order_id = ? AND internal_status = 'GENERATED'").bind(now, tenantId, orderId),
   db.prepare(

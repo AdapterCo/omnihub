@@ -113,6 +113,8 @@ export async function cancelSale(db: D1Database, tenantId: string, id: string, a
  const sale = await loadSale(db, tenantId, id);
  requireStoreAccess(actor, sale.store_id);
  if (sale.status === 'CANCELLED') throw new RuleError('Venda já cancelada.', 409);
+ const orderBills=await db.prepare("SELECT r.id FROM order_receivables r JOIN orders o ON o.id=r.order_id WHERE o.sale_id=? AND r.tenant_id=? AND r.status NOT IN ('CANCELLED','REFUNDED') LIMIT 1").bind(id,tenantId).first();
+ if(orderBills)throw new RuleError('Esta venda possui boletos de pedido. Concilie e cancele/estorne as cobranças no Asaas antes de cancelar a venda.',409);
  // Pagamento integrado: cobrança em aberto se resolve pelo fluxo de pagamento (cancelar a
  // cobrança devolve o estoque); cobrança paga só permite cancelar a venda depois do estorno
  // confirmado pelo provedor (lib/payments/service.ts faz o estorno e chama esta função).

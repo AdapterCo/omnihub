@@ -3,7 +3,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 
 // Testa a LÓGICA de scripts/backup/backup.sh (nome, publicação atômica, validação,
 // retenção) com `pg_dump`/`pg_restore` SIMULADOS (mock explícito: não há PostgreSQL nem
@@ -29,10 +29,18 @@ function setup(options: { dumpFails?: boolean; invalidDump?: boolean } = {}) {
     chmodSync(join(bin, 'pg_dump'), 0o755);
     chmodSync(join(bin, 'pg_restore'), 0o755);
     const run = (extra: Record<string, string> = {}) =>
-        spawnSync('sh', [posix(script)], { encoding: 'utf8', env: { ...process.env, PATH: `${posix(bin)}:${process.env.PATH}`, BACKUP_DIR: posix(backups), ...extra } });
-    return { backups, run };
+        spawnSync('sh', [posix(script)], { encoding: 'utf8', env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, BACKUP_DIR: posix(backups), ...extra } });
+    return { root, backups, run };
 }
 const dumps = (dir: string) => readdirSync(dir).filter((f) => /^omnihub-.*\.dump$/.test(f));
+
+test('backup completo inclui arquivos e manifesto conferível; storage ausente não publica dump', {skip:!shAvailable},()=>{
+ const f=setup();const storage=join(f.root,'storage');mkdirSync(storage);writeFileSync(join(storage,'original.pdf'),'%PDF-MOCK');
+ const result=f.run({STORAGE_DIR:posix(storage)});assert.equal(result.status,0,result.stderr);
+ const names=readdirSync(f.backups);assert.equal(names.filter(n=>n.endsWith('.files.tar.gz')).length,1);assert.equal(names.filter(n=>n.endsWith('.sha256')).length,1);
+ const checked=spawnSync('sh',['-c','cd "$1" && sha256sum -c omnihub-*.sha256','sh',posix(f.backups)],{encoding:'utf8'});assert.equal(checked.status,0,checked.stderr);
+ const broken=setup();assert.notEqual(broken.run({STORAGE_DIR:posix(join(broken.root,'missing'))}).status,0);assert.equal(dumps(broken.backups).length,0);
+});
 
 test('backup.sh publica o dump com nome final, marca latest.ok e não deixa temporários', { skip: !shAvailable }, () => {
     const { backups, run } = setup();

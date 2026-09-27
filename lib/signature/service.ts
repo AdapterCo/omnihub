@@ -35,7 +35,7 @@ async function loadConfig(db: D1Database, tenantId: string, storeId: string): Pr
  return db.prepare(`${CONFIG_SELECT} WHERE tenant_id = ? AND store_id = ?`).bind(tenantId, storeId).first<ConfigRow>();
 }
 
-export async function saveSignatureConfig(db: D1Database, tenantId: string, storeId: string, input: { apiKey?: string; webhookSecret?: string; motoTemplate?: string; locacaoTemplate?: string }, actor: Actor, now = Date.now()): Promise<void> {
+export async function saveSignatureConfig(db: D1Database, tenantId: string, storeId: string, input: { apiKey?: string; webhookSecret?: string; motoTemplate?: string; locacaoTemplate?: string; motoInitials?: boolean; locacaoInitials?: boolean }, actor: Actor, now = Date.now()): Promise<void> {
  requirePermission(actor.permissions, 'SIGNATURE_CONFIG');
  const store = await db.prepare('SELECT id FROM stores WHERE id = ? AND tenant_id = ?').bind(storeId, tenantId).first<{ id: string }>();
  if (!store) throw new RuleError('Loja não encontrada.', 404);
@@ -56,6 +56,7 @@ export async function saveSignatureConfig(db: D1Database, tenantId: string, stor
    .prepare('INSERT INTO signature_configs (id, tenant_id, store_id, api_key_enc, webhook_secret_enc, webhook_key, moto_template, locacao_template, updated_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
    .bind(crypto.randomUUID(), tenantId, storeId, encryptSecret(apiKey), secret ? encryptSecret(secret) : null, randomBytes(24).toString('hex'), moto, locacao, actor.userId, now, now)
    .run();
+  await db.prepare('UPDATE signature_configs SET moto_initials=?,locacao_initials=? WHERE store_id=? AND tenant_id=?').bind(input.motoInitials?1:0,input.locacaoInitials?1:0,storeId,tenantId).run();
   return;
  }
  // Campo de segredo em branco mantém o valor já salvo (nunca é exibido de volta).
@@ -63,18 +64,22 @@ export async function saveSignatureConfig(db: D1Database, tenantId: string, stor
   .prepare('UPDATE signature_configs SET api_key_enc = ?, webhook_secret_enc = ?, moto_template = ?, locacao_template = ?, updated_by = ?, updated_at = ? WHERE id = ?')
   .bind(apiKey ? encryptSecret(apiKey) : existing.apiKeyEnc, secret ? encryptSecret(secret) : existing.webhookSecretEnc, moto, locacao, actor.userId, now, existing.id)
   .run();
+ if(input.motoInitials!==undefined)await db.prepare('UPDATE signature_configs SET moto_initials=? WHERE store_id=? AND tenant_id=?').bind(input.motoInitials?1:0,storeId,tenantId).run();
+ if(input.locacaoInitials!==undefined)await db.prepare('UPDATE signature_configs SET locacao_initials=? WHERE store_id=? AND tenant_id=?').bind(input.locacaoInitials?1:0,storeId,tenantId).run();
 }
 
-export type SignatureConfigSummary = { storeId: string; configured: boolean; hasWebhookSecret: boolean; motoTemplate: string; locacaoTemplate: string; webhookPath: string | null; updatedAt: number | null };
+export type SignatureConfigSummary = { storeId: string; configured: boolean; hasWebhookSecret: boolean; motoTemplate: string; locacaoTemplate: string; motoInitials: boolean; locacaoInitials: boolean; webhookPath: string | null; updatedAt: number | null };
 
 export async function getSignatureConfigSummary(db: D1Database, tenantId: string, storeId: string): Promise<SignatureConfigSummary> {
  const c = await loadConfig(db, tenantId, storeId);
+ const initials=await db.prepare('SELECT moto_initials AS moto,locacao_initials AS locacao FROM signature_configs WHERE tenant_id=? AND store_id=?').bind(tenantId,storeId).first<{moto:number;locacao:number}>();
  return {
   storeId,
   configured: !!c,
   hasWebhookSecret: !!c?.webhookSecretEnc,
   motoTemplate: c?.motoTemplate ?? '',
   locacaoTemplate: c?.locacaoTemplate ?? '',
+  motoInitials:!!initials?.moto,locacaoInitials:!!initials?.locacao,
   webhookPath: c ? `/api/signature/adapter-sign/webhook/${c.webhookKey}` : null,
   updatedAt: c ? Number(c.updatedAt) : null,
  };
@@ -262,6 +267,9 @@ export async function syncContract(db: D1Database, tenantId: string, contractId:
  if (!config) return contract.status;
  const client = clientFor(config, deps);
  const env = await client.getEnvelope(contract.envelopeId);
+ if (env.id !== contract.envelopeId || env.externalRef !== contract.externalRef || !Array.isArray(env.documents) || !Array.isArray(env.signers)) {
+  throw new AdapterSignError(0, 'INVALID_RESPONSE', 'O Adapter Sign retornou dados de outro contrato ou uma resposta incompleta.');
+ }
  await db.prepare('UPDATE contracts SET adapter_status = ?, validation_code = COALESCE(?, validation_code), last_checked_at = ? WHERE id = ?').bind(env.status, env.validationCode ?? null, now, contractId).run();
  const target = mapEnvelope(env, contract.signerClienteId);
  if (target !== 'COMPLETED') {
@@ -270,23 +278,25 @@ export async function syncContract(db: D1Database, tenantId: string, contractId:
   }
   return target;
  }
- const docInfo = env.documents.find((d) => d.id === contract.adapterDocumentId) ?? env.documents[0];
+ const docInfo = env.documents.find((d) => d.id === contract.adapterDocumentId);
  if (!docInfo?.finalAvailable) {
   // Assinado, PDF final ainda sendo gerado: tenta de novo na próxima consulta.
   if (contract.status === 'SENT') await db.prepare("UPDATE contracts SET internal_status = 'CLIENT_SIGNED', updated_at = ? WHERE id = ? AND internal_status = 'SENT'").bind(now, contractId).run();
   return 'CLIENT_SIGNED';
  }
  // Reivindica a finalização: dois processamentos simultâneos (webhook + worker) não baixam duas vezes.
- if (contract.status !== 'FINALIZING') {
-  const claim = await db.prepare("UPDATE contracts SET internal_status = 'FINALIZING', updated_at = ? WHERE id = ? AND internal_status IN ('SENT','CLIENT_SIGNED')").bind(now, contractId).run();
-  if (claim.meta.changes !== 1) return 'FINALIZING';
- }
+ const processingToken = crypto.randomUUID();
+ const claim = await db.prepare("UPDATE contracts SET internal_status = 'FINALIZING', processing_token = ?, processing_until = ?, updated_at = ? WHERE id = ? AND internal_status IN ('SENT','CLIENT_SIGNED','FINALIZING') AND (processing_until IS NULL OR processing_until < ?)").bind(processingToken, now + 5 * 60_000, now, contractId, now).run();
+ if (claim.meta.changes !== 1) return 'FINALIZING';
  try {
   const finalPdf = await client.finalDocument(env.id, docInfo.id);
   const evidencePdf = await client.evidence(env.id);
+  if (![finalPdf,evidencePdf].every(pdf => Buffer.from(pdf.subarray(0,5)).toString() === '%PDF-')) throw new RuleError('Adapter Sign não retornou os dois arquivos em PDF.',502);
+  if (docInfo.finalSha256 && sha256Hex(finalPdf) !== docInfo.finalSha256) throw new RuleError('Hash do PDF assinado diverge do informado pelo Adapter Sign.',502);
   const who = { userId: contract.sentBy ?? 'adapter-sign', displayName: 'Adapter Sign' };
-  const signed = await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'CONTRATO_ASSINADO', description: `Contrato assinado (${contract.externalRef})`, originalFilename: `${contract.externalRef}-assinado.pdf`, bytes: finalPdf, source: 'adapter_sign' }, who, now);
-  const evidence = await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'EVIDENCIA_ASSINATURA', description: `Relatório de evidências Adapter Sign (${contract.externalRef})`, originalFilename: `${contract.externalRef}-evidencias.pdf`, bytes: evidencePdf, source: 'adapter_sign' }, who, now);
+  const existing = async (type: string, bytes: Uint8Array) => db.prepare('SELECT id FROM documents WHERE tenant_id = ? AND contract_id = ? AND type = ? AND sha256 = ? AND deleted_at IS NULL').bind(tenantId,contractId,type,sha256Hex(bytes)).first<{id:string}>();
+  const signed = await existing('CONTRATO_ASSINADO',finalPdf) ?? await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'CONTRATO_ASSINADO', description: `Contrato assinado (${contract.externalRef})`, originalFilename: `${contract.externalRef}-assinado.pdf`, bytes: finalPdf, source: 'adapter_sign' }, who, now);
+  const evidence = await existing('EVIDENCIA_ASSINATURA',evidencePdf) ?? await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'EVIDENCIA_ASSINATURA', description: `Relatório de evidências Adapter Sign (${contract.externalRef})`, originalFilename: `${contract.externalRef}-evidencias.pdf`, bytes: evidencePdf, source: 'adapter_sign' }, who, now);
   await db
    .prepare("UPDATE contracts SET internal_status = 'COMPLETED', signed_document_id = ?, evidence_document_id = ?, signed_sha256 = ?, completed_at = ?, last_error = '', updated_at = ? WHERE id = ?")
    .bind(signed.id, evidence.id, sha256Hex(finalPdf), now, now, contractId)
@@ -295,6 +305,8 @@ export async function syncContract(db: D1Database, tenantId: string, contractId:
  } catch (error) {
   await db.prepare("UPDATE contracts SET internal_status = 'CLIENT_SIGNED', last_error = ?, updated_at = ? WHERE id = ? AND internal_status = 'FINALIZING'").bind(error instanceof AdapterSignError ? friendlySignError(error) : 'Falha ao baixar o contrato assinado.', now, contractId).run();
   throw error;
+ } finally {
+  await db.prepare('UPDATE contracts SET processing_token = NULL, processing_until = NULL WHERE id = ? AND processing_token = ?').bind(contractId,processingToken).run();
  }
 }
 

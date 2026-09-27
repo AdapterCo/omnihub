@@ -12,6 +12,9 @@ services:
       FISCAL_WORKER_INTERVAL_MS: ${FISCAL_WORKER_INTERVAL_MS:-30000}
       # Contratos em PDF e anexos dos pedidos (volume omnihub_files). Faça cópia externa junto com os dumps.
       STORAGE_DIR: /data/storage
+      ADAPTER_SIGN_BASE_URL: ${ADAPTER_SIGN_BASE_URL:-https://sign.adapterco.com.br/api/v1}
+      SIGNATURE_WORKER_INTERVAL_MS: ${SIGNATURE_WORKER_INTERVAL_MS:-60000}
+      BILLING_WORKER_INTERVAL_MS: ${BILLING_WORKER_INTERVAL_MS:-60000}
     volumes:
       - omnihub_files:/data/storage
     # Sem resposta saudável, o Docker marca o container como unhealthy e o Traefik para de
@@ -72,10 +75,12 @@ services:
       PGDATABASE: omnihub
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      STORAGE_DIR: /data/storage
     entrypoint: ["sh", "/scripts/backup-loop.sh"]
     volumes:
       - omnihub_backups:/backups
       - ./scripts/backup:/scripts:ro
+      - omnihub_files:/data/storage:ro
     networks:
       - omnihub_internal
 
