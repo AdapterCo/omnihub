@@ -4,7 +4,7 @@
 // nos logs" — por isso `sanitizeForAudit` remove chaves conhecidas (senha, pfx, csc etc.)
 // antes de serializar `before`/`after`, e cada chamador é responsável por nunca passar um
 // segredo bruto em `before`/`after`.
-const SECRET_KEYS = new Set(['passphrase', 'pfxbase64', 'pfxbuffer', 'csc', 'password', 'senha', 'privatekeypem', 'certbase64']);
+const SECRET_KEYS = new Set(['passphrase', 'pfxbase64', 'pfxbuffer', 'csc', 'password', 'senha', 'privatekeypem', 'certbase64', 'apikey', 'webhooksecret', 'signingurl']);
 
 function sanitizeForAudit(value: unknown): unknown {
     if (value === null || value === undefined) return value;

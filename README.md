@@ -99,6 +99,17 @@ O container roda `npm run db:migrate` antes de iniciar. O DNS de `omnihub.adapte
 
 Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 
+### Pedidos, contratos e documentos
+
+- **Arquivos (contratos em PDF e anexos):** ficam em disco no diretório `STORAGE_DIR` (no docker-compose: `/data/storage`, volume `omnihub_files`). Sem `STORAGE_DIR`, gerar contrato e anexar documento ficam bloqueados com aviso. **O backup do banco não inclui esses arquivos**: copie o volume `omnihub_files` para fora da VPS junto com os dumps.
+- **Modelos de contrato:** `contrato-moto` v1 (D-MAX, CNPJ 65.715.457/0001-28) e `contrato-locacao` v1 (F C Eletrônicos / Grupo Cell, CNPJ 15.243.489/0001-08). Cada modelo só é gerado pela loja cadastrada com o CNPJ da empresa citada no texto. Os PDFs originais estão em `docs/contratos/originais/`.
+
+### Assinatura eletrônica (Adapter Sign)
+
+- Em **Minhas lojas > Assinatura eletrônica**: API key e segredo do webhook da organização da loja no Adapter Sign (guardados cifrados), identificadores dos modelos de moto/locação e a URL do webhook para cadastrar no Adapter Sign (eventos `signer.signed`, `signer.declined`, `envelope.completed`, `envelope.expired`, `envelope.cancelled`).
+- No Adapter Sign: modelos com os papéis `loja` (representa a empresa, ordem 1) e `cliente` (ordem 2); o **proprietário** aceita a autorização em Configurações → Assinatura da empresa.
+- `ADAPTER_SIGN_BASE_URL` (padrão `https://sign.adapterco.com.br/api/v1`) e `SIGNATURE_WORKER_INTERVAL_MS` (padrão 60000; 0 desliga) são opcionais.
+
 ## Próxima etapa
 
 1. Definir o provedor de cobrança, planos, valores e política de renovação; implementar ciclo completo com eventos autenticados, repetição segura e conciliação.

@@ -6,6 +6,9 @@ import { commandSchema } from '@/lib/commands';
 import { loadPermissions } from '@/lib/authz/service';
 import { listStores, listProductsForSnapshot } from '@/lib/catalog/service';
 import { listOrders, listUnits } from '@/lib/orders/service';
+import { listContracts } from '@/lib/contracts/service';
+import { getSignatureConfigSummary } from '@/lib/signature/service';
+import { listOrderDocuments } from '@/lib/documents/service';
 import { listStockMapForTenant, listTransfersForSnapshot } from '@/lib/inventory/service';
 import { listSessionsForSnapshot } from '@/lib/cash/service';
 import { listSalesForSnapshot } from '@/lib/sales/service';
@@ -73,14 +76,19 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
  const openCharges=(await listOpenCharges(db,tenantId)).filter(ch=>isAdmin||sales.some(s=>s.id===ch.saleId&&inScope(s.storeId))).map(ch=>({...ch,qrSvg:null}));
  // Pedidos (venda com contrato/locação) e unidades com chassi/IMEI.
  const orders=await listOrders(db,tenantId,actor);
+ const contracts=await listContracts(db,tenantId,actor);
+ // Assinatura eletrônica: quem configura vê o resumo (sem segredos); os demais só se está pronta.
+ const canConfigSignature=actor.permissions.has('SIGNATURE_CONFIG');
+ const signatureConfigs=Object.fromEntries(await Promise.all(stores.map(async s=>{const c=await getSignatureConfigSummary(db,tenantId,s.id);return [s.id,canConfigSignature?c:{...c,hasWebhookSecret:false,webhookPath:null}] as const})));
+ const documents=await listOrderDocuments(db,tenantId,actor);
  const units=(actor.permissions.has('STOCK_VIEW')||actor.permissions.has('ORDER_VIEW'))?(await listUnits(db,tenantId)).filter(u=>isAdmin||inScope(u.storeId)):[];
- if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units};
+ if(isAdmin)return {stores:storeRecords,products,stock,transfers,cash,sales,audit:relationalAudit,users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,contracts,documents,signatureConfigs};
  return {
   stores:storeRecords,products:products.map(p=>({...p,cost:0})),stock,transfers,
   cash:cash.filter(c=>inScope(c.storeId)).map(c=>c.closedAt?c:{...c,opening:0}),
   sales:sales.filter(s=>inScope(s.storeId)),
   audit:relationalAudit.filter(a=>inScope(a.storeId)),
-  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,
+  users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,contracts,documents,signatureConfigs,
  };
 }
 async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}

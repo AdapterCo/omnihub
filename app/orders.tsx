@@ -1,10 +1,10 @@
 'use client';
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus } from 'lucide-react';
+import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus, FileSignature, Paperclip, Eye, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
-import { money, date, type Snapshot, type OrderView, type UnitView, type StoreRecord } from '@/lib/domain';
+import { money, date, type Snapshot, type OrderView, type UnitView, type StoreRecord, type ContractView, type DocumentView } from '@/lib/domain';
 
 // Aba Pedidos (venda com contrato de moto e locação) e painel de unidades com chassi/IMEI.
 // Toda regra fica no backend (lib/orders/service.ts); a tela só coleta e mostra os dados.
@@ -20,6 +20,23 @@ const ORDER_STATUS: Record<string, { label: string; tone: string }> = {
  CANCELLED: { label: 'Cancelado', tone: 'error' },
 };
 const UNIT_STATUS: Record<string, string> = { AVAILABLE: 'Disponível', RESERVED: 'Reservada', SOLD: 'Vendida', RENTED: 'Locada' };
+// Status técnico do contrato (guardado separado) → texto para o usuário (§15 da especificação).
+const CONTRACT_STATUS: Record<string, { label: string; tone: string }> = {
+ GENERATED: { label: 'Gerado: aguardando envio para assinatura', tone: 'warning' },
+ SUPERSEDED: { label: 'Substituído por uma revisão mais nova', tone: 'neutral' },
+ CANCELLED: { label: 'Cancelado', tone: 'error' },
+ SENDING: { label: 'Enviando: aguardando confirmação do Adapter Sign', tone: 'warning' },
+ SENT: { label: 'Aguardando assinatura do cliente', tone: 'warning' },
+ CLIENT_SIGNED: { label: 'Cliente assinou: finalizando', tone: 'warning' },
+ FINALIZING: { label: 'Baixando o contrato assinado', tone: 'warning' },
+ COMPLETED: { label: 'Contrato assinado', tone: 'success' },
+ EXPIRED: { label: 'Expirado: gere e envie de novo', tone: 'error' },
+ DECLINED: { label: 'Recusado pelo cliente', tone: 'error' },
+};
+// Status que ainda permitem gerar uma revisão nova do contrato (nada pendente no Adapter Sign).
+const REGENERABLE = ['GENERATED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
+const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign' };
+const ACCEPT = 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png';
 
 const toCents = (v: string | undefined) => {
  const n = Number(String(v ?? '').replace(/\./g, '').replace(',', '.'));
@@ -39,7 +56,7 @@ function NativePick({ value, onChange, options, placeholder }: { value: string; 
  </select>;
 }
 
-export function OrdersPage({ data, act, stores, storeFilter, busy, active }: { data: Snapshot; act: Act; stores: StoreRecord[]; storeFilter: string; busy: boolean; active: boolean }) {
+export function OrdersPage({ data, act, stores, storeFilter, busy, active, refresh }: { data: Snapshot; act: Act; stores: StoreRecord[]; storeFilter: string; busy: boolean; active: boolean; refresh: () => Promise<unknown> }) {
  const perms = new Set((data.actor.permissions as unknown as string[]) ?? []);
  const orders = (data.state.orders ?? []).filter((o) => storeFilter === 'all' || o.storeId === storeFilter);
  const [search, setSearch] = useState('');
@@ -68,7 +85,7 @@ export function OrdersPage({ data, act, stores, storeFilter, busy, active }: { d
     : <div className="list-row"><span className="muted">{orders.length ? 'Nenhum pedido encontrado na busca.' : 'Nenhum pedido ainda. O pedido reserva a unidade (chassi/IMEI) até ser finalizado ou cancelado.'}</span></div>}
   </section>
   {editing && <OrderForm data={data} act={act} stores={orderStores} order={editing === 'new' ? null : editing} busy={busy} onClose={() => setEditing(null)} onSaved={(id) => { setEditing(null); if (id) setViewing(id); }} />}
-  {current && !editing && <OrderDetail order={current} act={act} perms={perms} busy={busy} active={active} onClose={() => setViewing(null)} onEdit={() => setEditing(current)} />}
+  {current && !editing && <OrderDetail order={current} contracts={(data.state.contracts ?? []).filter((c) => c.orderId === current.id)} documents={(data.state.documents ?? []).filter((d) => d.orderId === current.id)} act={act} refresh={refresh} perms={perms} busy={busy} active={active} onClose={() => setViewing(null)} onEdit={() => setEditing(current)} />}
  </>;
 }
 
@@ -134,7 +151,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
   </form></DialogContent></Dialog>;
 }
 
-function OrderDetail({ order, act, perms, busy, active, onClose, onEdit }: { order: OrderView; act: Act; perms: Set<string>; busy: boolean; active: boolean; onClose: () => void; onEdit: () => void }) {
+function OrderDetail({ order, contracts, documents, act, refresh, perms, busy, active, onClose, onEdit }: { order: OrderView; contracts: ContractView[]; documents: DocumentView[]; act: Act; refresh: () => Promise<unknown>; perms: Set<string>; busy: boolean; active: boolean; onClose: () => void; onEdit: () => void }) {
  const [note, setNote] = useState('');
  const [cancelReason, setCancelReason] = useState<string | null>(null);
  const [confirmComplete, setConfirmComplete] = useState(false);
@@ -160,7 +177,8 @@ function OrderDetail({ order, act, perms, busy, active, onClose, onEdit }: { ord
  return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Pedido #{order.number} · {order.type === 'VENDA' ? 'Venda com contrato (moto)' : 'Locação'}</DialogTitle><DialogDescription><span className={'badge ' + (ORDER_STATUS[order.status]?.tone ?? 'neutral')}>{ORDER_STATUS[order.status]?.label ?? order.status}</span></DialogDescription></DialogHeader>
   <div className="stack">
    <div className="order-summary">{rows.map(([k, val]) => <div key={k}><span className="muted">{k}</span><strong>{val}</strong></div>)}</div>
-   <div className="notice">Contrato: a geração do PDF e o envio para assinatura (Adapter Sign) entram na próxima etapa. Nenhum contrato foi gerado ainda.</div>
+   <ContractSection order={order} contracts={contracts} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
+   <DocumentsSection order={order} documents={documents} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
    <section><h3 className="section-title"><MessageSquare size={16} /> Observações</h3>
     {order.notes.length ? order.notes.map((n) => <div key={n.id} className="note"><div className="muted">{n.author} · {date(n.createdAt)}</div><p>{n.text}</p></div>) : <p className="muted">Nenhuma observação.</p>}
     {perms.has('ORDER_VIEW') && <form className="inline" style={{ gap: 8, marginTop: 8 }} onSubmit={async (e) => { e.preventDefault(); if (!note.trim()) return; if (await act({ type: 'order.note', id: order.id, text: note.trim() })) setNote(''); }}>
@@ -177,6 +195,120 @@ function OrderDetail({ order, act, perms, busy, active, onClose, onEdit }: { ord
     <div className="form-actions" style={{ justifyContent: 'flex-start' }}><Button variant="outline" onClick={() => setCancelReason(null)}>Voltar</Button><Button disabled={busy || cancelReason.trim().length < 5} onClick={async () => { if (await act({ type: 'order.cancel', id: order.id, reason: cancelReason.trim() })) setCancelReason(null); }}>Confirmar cancelamento</Button></div></div>}
   </div>
  </DialogContent></Dialog>;
+}
+
+const docUrl = (id: string, download = false) => `/api/documents/${id}${download ? '?download=1' : ''}`;
+
+/** Chama as ações de assinatura (rota própria: a resposta pode trazer o link do cliente, que não é gravado). */
+async function signatureAction(contractId: string, action: 'send' | 'link' | 'refresh' | 'cancel', body?: unknown): Promise<{ ok: boolean; data: Record<string, unknown> }> {
+ const r = await fetch(`/api/signature/contracts/${contractId}/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+ const data = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+ return { ok: r.ok, data };
+}
+
+function ContractSection({ order, contracts, act, refresh, perms, busy, active }: { order: OrderView; contracts: ContractView[]; act: Act; refresh: () => Promise<unknown>; perms: Set<string>; busy: boolean; active: boolean }) {
+ const [history, setHistory] = useState(false);
+ const [working, setWorking] = useState(false);
+ const [error, setError] = useState('');
+ const [link, setLink] = useState<{ url: string; expiresAt: string | null } | null>(null);
+ const [copied, setCopied] = useState(false);
+ const [cancelReason, setCancelReason] = useState<string | null>(null);
+ // O mais recente é o vigente (as revisões anteriores ficam no histórico).
+ const current = contracts.find((c) => c.status !== 'SUPERSEDED') ?? null;
+ const canGenerate = perms.has('ORDER_CREATE') && order.status !== 'CANCELLED' && (!current || REGENERABLE.includes(current.status));
+ const run = async (action: 'send' | 'link' | 'refresh' | 'cancel', body?: unknown) => {
+  if (!current) return;
+  setWorking(true); setError(''); setCopied(false);
+  try {
+   const { ok, data } = await signatureAction(current.id, action, body);
+   if (!ok) { setError(String(data.error ?? 'Não foi possível concluir.')); if (action === 'send') await refresh(); return; }
+   if ((action === 'send' || action === 'link') && typeof data.signingUrl === 'string') setLink({ url: data.signingUrl, expiresAt: (data.signingUrlExpiresAt ?? data.expiresAt ?? null) as string | null });
+   if (action === 'cancel') setCancelReason(null);
+   await refresh();
+  } finally { setWorking(false); }
+ };
+ const copy = async () => { if (!link) return; try { await navigator.clipboard.writeText(link.url); setCopied(true); } catch { setCopied(false); } };
+ const templateLabel = order.type === 'VENDA' ? 'Contrato de compra e venda (moto)' : 'Contrato de locação com opção de compra';
+ return <section><h3 className="section-title"><FileSignature size={16} /> Contrato</h3>
+  <div className="notice" style={{ marginBottom: 8 }}>
+   <div><strong>{templateLabel}</strong>{current && <> · modelo {current.templateKey} v{current.templateVersion}, revisão {current.revision}</>}</div>
+   {current ? <div className="stack" style={{ gap: 6, marginTop: 6 }}>
+    <div><span className={'badge ' + (CONTRACT_STATUS[current.status]?.tone ?? 'neutral')}>{CONTRACT_STATUS[current.status]?.label ?? current.status}</span></div>
+    <div className="muted">Gerado por {current.generatedByName} em {date(current.generatedAt)} · referência {current.externalRef}{current.validationCode ? ` · código de validação ${current.validationCode}` : ''}</div>
+    <div className="muted" style={{ wordBreak: 'break-all' }}>SHA-256 do PDF original: {current.originalSha256}</div>
+    {current.sentAt && <div className="muted">Enviado por {current.sentByName} em {date(current.sentAt)} (a loja assina no envio, em nome de quem enviou)</div>}
+    {current.completedAt && <div className="muted">Assinado em {date(current.completedAt)}. Conferência pública: sign.adapterco.com.br/verify{current.validationCode ? ` (código ${current.validationCode})` : ''}</div>}
+    {current.lastError && current.status !== 'COMPLETED' && <div className="notice error" style={{ margin: 0 }}>{current.lastError}</div>}
+   </div> : <p className="muted" style={{ marginTop: 6 }}>Nenhum contrato gerado. Confira os dados do pedido e do cliente e gere o PDF para revisar antes do envio.</p>}
+   <div className="inline flex-wrap" style={{ gap: 6, marginTop: 10 }}>
+    {current && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.originalDocumentId), '_blank', 'noopener')}><Eye size={15} /> Visualizar PDF</Button>}
+    {canGenerate && <Button size="sm" variant={current ? 'outline' : 'default'} disabled={busy || working || !active} onClick={() => void act({ type: 'contract.generate', orderId: order.id })}><FileSignature size={15} /> {current ? 'Gerar nova revisão' : 'Gerar contrato'}</Button>}
+    {current && perms.has('ORDER_CREATE') && (current.status === 'GENERATED' || current.status === 'SENDING') && <Button size="sm" disabled={working || !active} onClick={() => void run('send')}><FileSignature size={15} /> {current.status === 'SENDING' ? 'Tentar enviar de novo' : 'Enviar para assinatura'}</Button>}
+    {current?.status === 'SENT' && perms.has('ORDER_CREATE') && <Button variant="outline" size="sm" disabled={working || !active} onClick={() => void run('link')}>Gerar novo link para o cliente</Button>}
+    {current && ['SENT', 'CLIENT_SIGNED', 'FINALIZING'].includes(current.status) && <Button variant="outline" size="sm" disabled={working} onClick={() => void run('refresh')}>Atualizar situação</Button>}
+    {current && ['SENT', 'CLIENT_SIGNED'].includes(current.status) && perms.has('ORDER_CANCEL') && <Button variant="outline" size="sm" disabled={working || !active} onClick={() => setCancelReason('')}><X size={15} /> Cancelar assinatura</Button>}
+    {current?.signedDocumentId && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.signedDocumentId!), '_blank', 'noopener')}><Eye size={15} /> Contrato assinado</Button>}
+    {current?.evidenceDocumentId && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.evidenceDocumentId!), '_blank', 'noopener')}><Eye size={15} /> Evidências</Button>}
+   </div>
+   {working && <p className="muted" style={{ marginTop: 8 }}>Falando com o Adapter Sign...</p>}
+   {error && <p className="notice error" style={{ marginTop: 8, marginBottom: 0 }}>{error}</p>}
+   {link && <div className="stack" style={{ gap: 6, marginTop: 10 }}>
+    <strong>Link de assinatura do cliente</strong>
+    <div className="muted">O cliente também recebe o convite por e-mail e, com telefone cadastrado, pelo WhatsApp. Este link não fica salvo no sistema: se precisar de novo, use "Gerar novo link".{link.expiresAt ? ` Válido até ${date(Date.parse(link.expiresAt))}.` : ''}</div>
+    <div className="inline" style={{ gap: 6 }}><input className="search-input" readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} /><Button size="sm" variant="outline" onClick={() => void copy()}>{copied ? 'Copiado' : 'Copiar'}</Button></div>
+   </div>}
+   {cancelReason !== null && <div className="stack" style={{ gap: 6, marginTop: 10 }}>
+    <label className="field">Motivo do cancelamento da assinatura (o envelope é cancelado no Adapter Sign e o pedido volta a poder ser alterado)<input value={cancelReason} maxLength={160} onChange={(e) => setCancelReason(e.target.value)} /></label>
+    <div className="inline" style={{ gap: 6 }}><Button size="sm" variant="outline" onClick={() => setCancelReason(null)}>Voltar</Button><Button size="sm" disabled={working || cancelReason.trim().length < 5} onClick={() => void run('cancel', { reason: cancelReason.trim() })}>Confirmar cancelamento</Button></div>
+   </div>}
+  </div>
+  {contracts.length > 1 && <button className="muted" style={{ textDecoration: 'underline', fontSize: '.8rem' }} onClick={() => setHistory(!history)}>{history ? 'Ocultar' : 'Ver'} revisões anteriores ({contracts.length - (current ? 1 : 0)})</button>}
+  {history && contracts.filter((c) => c !== current).map((c) => <div key={c.id} className="note"><div className="muted">Revisão {c.revision} · {date(c.generatedAt)} · {CONTRACT_STATUS[c.status]?.label ?? c.status}</div><button className="muted" style={{ textDecoration: 'underline' }} onClick={() => window.open(docUrl(c.originalDocumentId), '_blank', 'noopener')}>Ver PDF desta revisão</button></div>)}
+ </section>;
+}
+
+function DocumentsSection({ order, documents, act, refresh, perms, busy, active }: { order: OrderView; documents: DocumentView[]; act: Act; refresh: () => Promise<unknown>; perms: Set<string>; busy: boolean; active: boolean }) {
+ const [description, setDescription] = useState('');
+ const [file, setFile] = useState<File | null>(null);
+ const [sending, setSending] = useState(false);
+ const [error, setError] = useState('');
+ const [inputKey, setInputKey] = useState(0);
+ const upload = async (e: FormEvent) => {
+  e.preventDefault();
+  setError('');
+  if (!file) { setError('Selecione um arquivo PDF, JPG ou PNG.'); return; }
+  if (!/\.(pdf|jpe?g|png)$/i.test(file.name)) { setError('Tipo de arquivo não aceito. Envie PDF, JPG ou PNG.'); return; }
+  if (file.size > 10 * 1024 * 1024) { setError('Arquivo maior que 10 MB.'); return; }
+  if (description.trim().length < 3) { setError('Informe a descrição do documento.'); return; }
+  setSending(true);
+  try {
+   const form = new FormData();
+   form.set('orderId', order.id);
+   form.set('description', description.trim());
+   form.set('file', file);
+   const r = await fetch('/api/documents', { method: 'POST', body: form });
+   const d = await r.json().catch(() => ({})) as { error?: string };
+   if (!r.ok) { setError(d.error ?? 'Não foi possível enviar o arquivo.'); return; }
+   setDescription(''); setFile(null); setInputKey((k) => k + 1);
+   await refresh();
+  } finally { setSending(false); }
+ };
+ return <section><h3 className="section-title"><Paperclip size={16} /> Documentos</h3>
+  {documents.length ? documents.map((d) => <div key={d.id} className="note split" style={{ alignItems: 'flex-start' }}>
+   <div><strong>{d.description}</strong><div className="muted">{DOC_TYPE[d.type] ?? d.type}{d.source !== 'manual' ? ' · automático' : ''} · {date(d.createdAt)}{d.uploadedByName ? ` · ${d.uploadedByName}` : ''} · {(d.size / 1024).toFixed(0)} KB</div></div>
+   <div className="inline" style={{ gap: 4 }}>
+    <Button variant="outline" size="sm" onClick={() => window.open(docUrl(d.id), '_blank', 'noopener')}><Eye size={15} /> Ver</Button>
+    <Button variant="outline" size="sm" onClick={() => window.open(docUrl(d.id, true), '_blank', 'noopener')}><Download size={15} /> Baixar</Button>
+    {perms.has('DOCUMENT_DELETE') && <Button variant="outline" size="sm" disabled={busy || !active} onClick={() => void act({ type: 'document.delete', id: d.id })}><Trash2 size={15} /> Excluir</Button>}
+   </div>
+  </div>) : <p className="muted">Nenhum documento.</p>}
+  {perms.has('ORDER_CREATE') && order.status !== 'CANCELLED' && <form className="form-grid" style={{ marginTop: 8 }} onSubmit={upload}>
+   <Field label="Descrição"><input value={description} maxLength={160} placeholder="Ex.: RG do cliente" onChange={(e) => setDescription(e.target.value)} /></Field>
+   <Field label="Arquivo (PDF, JPG ou PNG, até 10 MB)"><input key={inputKey} type="file" accept={ACCEPT} onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+   {error && <p className="notice error full">{error}</p>}
+   <div className="full"><Button type="submit" variant="outline" disabled={sending || !active}><Paperclip size={15} /> {sending ? 'Enviando...' : 'Anexar documento'}</Button></div>
+  </form>}
+ </section>;
 }
 
 /** Unidades físicas (chassi/IMEI) dos produtos Moto e Locação, dentro de Produtos e estoque. */
@@ -218,4 +350,41 @@ export function UnitsPanel({ data, act, stores, storeFilter, busy, active }: { d
    </fieldset><div className="form-actions"><Button type="button" variant="outline" onClick={() => setAdding(false)}>Cancelar</Button><Button type="submit" disabled={busy}><Check /> Cadastrar</Button></div></form>
   </DialogContent></Dialog>}
  </section>;
+}
+
+/**
+ * Assinatura eletrônica (Adapter Sign) da loja: API key e segredo do webhook (cifrados no servidor,
+ * nunca exibidos de volta), identificadores dos modelos no Adapter Sign e a URL do webhook.
+ */
+export function SignatureConfigDialog({ data, store, act, busy, onClose }: { data: Snapshot; store: StoreRecord; act: Act; busy: boolean; onClose: () => void }) {
+ const summary = data.state.signatureConfigs?.[store.id];
+ const [v, setV] = useState<Values>({ apiKey: '', webhookSecret: '', motoTemplate: summary?.motoTemplate ?? '', locacaoTemplate: summary?.locacaoTemplate ?? '' });
+ const [copied, setCopied] = useState(false);
+ const set = (k: string, value: string) => setV((p) => ({ ...p, [k]: value }));
+ const webhookUrl = summary?.webhookPath ? `${typeof window === 'undefined' ? '' : window.location.origin}${summary.webhookPath}` : '';
+ const usesSale = store.modalities?.includes('VENDA_CONTRATO');
+ const usesRent = store.modalities?.includes('LOCACAO');
+ const submit = async (e: FormEvent) => {
+  e.preventDefault();
+  const ok = await act({ type: 'signature.config.save', storeId: store.id, apiKey: v.apiKey.trim() || undefined, webhookSecret: v.webhookSecret.trim() || undefined, motoTemplate: v.motoTemplate.trim(), locacaoTemplate: v.locacaoTemplate.trim() });
+  if (ok) set('apiKey', ''), set('webhookSecret', '');
+ };
+ return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Assinatura eletrônica · {store.name}</DialogTitle><DialogDescription>Integração com o Adapter Sign. Cada loja usa a organização dela no Adapter Sign (plano, modelos, API key e webhook próprios).</DialogDescription></DialogHeader>
+  <form onSubmit={submit}><fieldset disabled={busy} className="form-grid">
+   <div className="full inline flex-wrap" style={{ gap: 6 }}>
+    <span className={'badge ' + (summary?.configured ? 'success' : 'neutral')}>{summary?.configured ? 'API key salva' : 'Sem API key'}</span>
+    <span className={'badge ' + (summary?.hasWebhookSecret ? 'success' : 'warning')}>{summary?.hasWebhookSecret ? 'Segredo do webhook salvo' : 'Sem segredo do webhook'}</span>
+   </div>
+   <Field label={summary?.configured ? 'API key (deixe em branco para manter a salva)' : 'API key do Adapter Sign'} full hint="Adapter Sign → Configurações → API keys. Ela aparece uma única vez lá."><input type="password" autoComplete="off" value={v.apiKey} onChange={(e) => set('apiKey', e.target.value)} /></Field>
+   <Field label={summary?.hasWebhookSecret ? 'Segredo do webhook (em branco mantém o salvo)' : 'Segredo do webhook (whsec_...)'} full hint="Adapter Sign → Configurações → Webhooks, ao cadastrar a URL abaixo."><input type="password" autoComplete="off" value={v.webhookSecret} onChange={(e) => set('webhookSecret', e.target.value)} /></Field>
+   {usesSale && <Field label="Identificador do modelo de venda (moto) no Adapter Sign" hint="Ex.: o identificador que você criou em Modelos (papéis loja e cliente)."><input value={v.motoTemplate} maxLength={60} onChange={(e) => set('motoTemplate', e.target.value)} /></Field>}
+   {usesRent && <Field label="Identificador do modelo de locação no Adapter Sign"><input value={v.locacaoTemplate} maxLength={60} onChange={(e) => set('locacaoTemplate', e.target.value)} /></Field>}
+   {!usesSale && !usesRent && <p className="notice full">Esta loja não tem as modalidades Venda com contrato ou Locação: não há contratos para assinar.</p>}
+   {webhookUrl && <div className="field full">URL do webhook (cadastre no Adapter Sign com os eventos signer.signed, signer.declined, envelope.completed, envelope.expired e envelope.cancelled)
+    <div className="inline" style={{ gap: 6 }}><input className="search-input" readOnly value={webhookUrl} onFocus={(e) => e.currentTarget.select()} /><Button type="button" size="sm" variant="outline" onClick={async () => { try { await navigator.clipboard.writeText(webhookUrl); setCopied(true); } catch { setCopied(false); } }}>{copied ? 'Copiado' : 'Copiar'}</Button></div></div>}
+   {!webhookUrl && <p className="muted full">A URL do webhook aparece depois de salvar a API key.</p>}
+   <p className="muted full">Antes do primeiro envio, o proprietário da conta no Adapter Sign precisa aceitar a autorização em Configurações → Assinatura da empresa. Sem ela, o envio é recusado com explicação.</p>
+  </fieldset>
+  <div className="form-actions"><Button type="button" variant="outline" onClick={onClose}>Fechar</Button><Button type="submit" disabled={busy}><Check /> Salvar</Button></div>
+  </form></DialogContent></Dialog>;
 }

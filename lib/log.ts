@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 // conter valores de linhas, como e-mails, por isso não é registrado).
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-const SENSITIVE_KEY = /pass(word|phrase)?|senha|secret|token|cookie|authorization|csc|pfx|privatekey|certbase64|cert(ificate)?pem/i;
+const SENSITIVE_KEY = /pass(word|phrase)?|senha|secret|token|cookie|authorization|csc|pfx|privatekey|certbase64|cert(ificate)?pem|api_?key|signingurl/i;
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 export function redact(value: unknown, depth = 0): unknown {

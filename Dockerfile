@@ -15,6 +15,8 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0
 # node_modules completo de propósito: o Next precisa do TypeScript para ler next.config.ts.
 RUN chown -R node:node /app/.next
+# Diretório dos arquivos (contratos, anexos): o volume nomeado herda este dono na criação.
+RUN mkdir -p /data/storage && chown -R node:node /data
 USER node
 EXPOSE 3017
 # Aplica as migrações (idempotente) e sobe o servidor Next.js.

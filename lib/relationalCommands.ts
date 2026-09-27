@@ -16,6 +16,10 @@ import { saveNFCeStoreConfig, generateNFCeForSale } from './fiscal/nfce.ts';
 import { enqueueFiscalJob, runFiscalJobWorker } from './fiscal/queue.ts';
 import { requirePermission } from './authz/service.ts';
 import { registerUnit, removeUnit, createOrder, updateOrder, cancelOrder, completeOrder, addOrderNote } from './orders/service.ts';
+import { generateContract } from './contracts/service.ts';
+import { deleteDocument } from './documents/service.ts';
+import { storageFromEnv, type ObjectStorage } from './storage/index.ts';
+import { saveSignatureConfig } from './signature/service.ts';
 
 // Dispatcher único de todos os comandos de /api/workspace (Fase 1–3 cortadas): não há mais
 // um `execute()` sobre um JSON por conta — cada comando é uma escrita relacional própria,
@@ -26,7 +30,7 @@ import { registerUnit, removeUnit, createOrder, updateOrder, cancelOrder, comple
 // recebimento de transferência.
 const ACTIVE_EXEMPT = new Set(['transfer.receive', 'cash.close', 'sale.print']);
 
-export type DispatchContext = { ip?: string | null; correlationId?: string | null; payments?: PaymentDeps };
+export type DispatchContext = { ip?: string | null; correlationId?: string | null; payments?: PaymentDeps; storage?: ObjectStorage };
 
 export async function dispatchCommand(db: D1Database, tenantId: string, actor: Actor, plan: Entitlement, command: Command, now = Date.now(), context: DispatchContext = {}): Promise<string | undefined> {
     if (!ACTIVE_EXEMPT.has(command.type)) requireActive(plan, now);
@@ -186,6 +190,23 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         const id = await addOrderNote(db, tenantId, command.id, command.text, actor, now);
         await audit({ description: 'Observação adicionada ao pedido', entity: 'order', entityId: command.id });
         return id;
+    }
+    if (command.type === 'contract.generate') {
+        const result = await generateContract(db, context.storage ?? storageFromEnv(), tenantId, command.orderId, actor, now);
+        await audit({ description: `Contrato gerado (${result.externalRef})`, entity: 'order', entityId: command.orderId, after: result });
+        return result.contractId;
+    }
+    if (command.type === 'signature.config.save') {
+        const { type: _t, storeId, ...input } = command;
+        await saveSignatureConfig(db, tenantId, storeId, input, actor, now);
+        // Nunca grava API key nem segredo na auditoria: só o que mudou de não sensível.
+        await audit({ storeId, description: 'Configuração de assinatura eletrônica (Adapter Sign) salva', entity: 'signature_config', entityId: storeId, after: { motoTemplate: input.motoTemplate ?? '', locacaoTemplate: input.locacaoTemplate ?? '', apiKeyChanged: !!input.apiKey, webhookSecretChanged: !!input.webhookSecret } });
+        return storeId;
+    }
+    if (command.type === 'document.delete') {
+        const doc = await deleteDocument(db, tenantId, command.id, actor, now);
+        await audit({ description: `Documento excluído (exclusão lógica): ${doc.description}`, entity: 'document', entityId: command.id, after: doc });
+        return command.id;
     }
     if (command.type === 'payment.config.save') {
         const summary = await savePaymentConfig(db, tenantId, command.storeId, command, actor, now);

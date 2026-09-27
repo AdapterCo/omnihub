@@ -215,6 +215,10 @@ export const orderCommandSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal('order.cancel'), id: identifier, reason: short.min(5) }).strict(),
     z.object({ type: z.literal('order.complete'), id: identifier }).strict(),
     z.object({ type: z.literal('order.note'), id: identifier, text: z.string().trim().min(1).max(2000) }).strict(),
+    z.object({ type: z.literal('contract.generate'), orderId: identifier }).strict(),
+    z.object({ type: z.literal('document.delete'), id: identifier }).strict(),
+    // Assinatura eletrônica (Adapter Sign) da loja. Segredo em branco mantém o salvo.
+    z.object({ type: z.literal('signature.config.save'), storeId: identifier, apiKey: z.string().max(500).optional(), webhookSecret: z.string().max(500).optional(), motoTemplate: z.string().max(60).optional(), locacaoTemplate: z.string().max(60).optional() }).strict(),
 ]);
 export type OrderCommand = z.infer<typeof orderCommandSchema>;
 

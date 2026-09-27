@@ -10,4 +10,7 @@ export async function register() {
     // Reconciliação de cobranças integradas (Mercado Pago) abertas.
     const { startPaymentWorker } = await import('./lib/payments/worker');
     if (startPaymentWorker(database())) logger.info('payment-worker.iniciado');
+    // Reconciliação das assinaturas do Adapter Sign (webhook perdido, envio com resultado incerto).
+    const { startSignatureWorker } = await import('./lib/signature/worker');
+    if (startSignatureWorker(database())) logger.info('signature-worker.iniciado');
 }

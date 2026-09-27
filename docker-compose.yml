@@ -10,6 +10,10 @@ services:
       DATABASE_URL: postgres://omnihub:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@db:5432/omnihub
       FISCAL_SECRET_KEY: ${FISCAL_SECRET_KEY:?defina FISCAL_SECRET_KEY (>=32 caracteres) no .env}
       FISCAL_WORKER_INTERVAL_MS: ${FISCAL_WORKER_INTERVAL_MS:-30000}
+      # Contratos em PDF e anexos dos pedidos (volume omnihub_files). Faça cópia externa junto com os dumps.
+      STORAGE_DIR: /data/storage
+    volumes:
+      - omnihub_files:/data/storage
     # Sem resposta saudável, o Docker marca o container como unhealthy e o Traefik para de
     # roteá-lo. /api/health confere a conexão com o banco.
     healthcheck:
@@ -78,6 +82,7 @@ services:
 volumes:
   omnihub_pgdata:
   omnihub_backups:
+  omnihub_files:
 
 networks:
   omnihub_internal:

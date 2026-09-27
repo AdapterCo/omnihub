@@ -5,6 +5,7 @@ import { getStore, storeHasModality } from '../catalog/service.ts';
 import { findOpenSessionForUser } from '../cash/service.ts';
 import { createSale } from '../sales/service.ts';
 import { dayKey } from '../time.ts';
+import { assertOrderContractsEditable, invalidateOrderContracts } from '../contracts/service.ts';
 
 // Pedidos de venda com contrato (moto) e de locação (celular/equipamento), com unidade física
 // identificada (chassi/série ou IMEI). Fluxo pedido do usuário: o vendedor (inclusive o
@@ -269,6 +270,7 @@ export async function updateOrder(db: D1Database, tenantId: string, id: string, 
  const order = await loadOrder(db, tenantId, id);
  requireStoreAccess(actor, order.store_id);
  if (order.status !== 'OPEN') throw new RuleError('Só pedidos em aberto podem ser alterados.', 409);
+ await assertOrderContractsEditable(db, tenantId, id);
  const customer = await db.prepare('SELECT id FROM customers WHERE id = ? AND tenant_id = ?').bind(input.customerId, tenantId).first<{ id: string }>();
  if (!customer) throw new RuleError('Cliente não encontrado.', 404);
  const terms = validateTerms(order.type, { ...input, storeId: order.store_id, type: order.type }, now);
@@ -293,6 +295,8 @@ export async function updateOrder(db: D1Database, tenantId: string, id: string, 
    terms.adhesion_amount, terms.adhesion_billing, terms.adhesion_payment_method, terms.monthly_amount, terms.due_day, now, id)
   .run();
  if (result.meta.changes !== 1) throw new RuleError('O pedido mudou de situação enquanto era alterado. Atualize a tela.', 409);
+ // Os dados mudaram: contrato gerado e ainda não enviado deixa de valer (gere de novo).
+ await invalidateOrderContracts(db, tenantId, id, 'ORDER_UPDATED', now);
 }
 
 export async function cancelOrder(db: D1Database, tenantId: string, id: string, reason: string, actor: Actor, now = Date.now()): Promise<void> {
@@ -302,9 +306,11 @@ export async function cancelOrder(db: D1Database, tenantId: string, id: string, 
  const text = String(reason ?? '').trim();
  if (text.length < 5) throw new RuleError('Informe o motivo do cancelamento (mínimo 5 caracteres).', 400);
  if (order.status !== 'OPEN') throw new RuleError(order.status === 'COMPLETED' ? 'Pedido já finalizado: cancele a venda correspondente (a unidade volta ao estoque).' : 'Pedido já cancelado.', 409);
+ await assertOrderContractsEditable(db, tenantId, id);
  const claimed = await db.prepare("UPDATE orders SET status = 'CANCELLED', cancel_reason = ?, cancelled_at = ?, cancelled_by = ?, updated_at = ? WHERE id = ? AND status = 'OPEN'").bind(text, now, actor.userId, now, id).run();
  if (claimed.meta.changes !== 1) throw new RuleError('O pedido mudou de situação. Atualize a tela.', 409);
  await db.prepare("UPDATE product_units SET status = 'AVAILABLE', order_id = NULL, updated_at = ? WHERE id = ? AND order_id = ?").bind(now, order.unit_id, id).run();
+ await invalidateOrderContracts(db, tenantId, id, 'ORDER_CANCELLED', now);
 }
 
 export async function addOrderNote(db: D1Database, tenantId: string, orderId: string, text: string, actor: Actor, now = Date.now()): Promise<string> {
