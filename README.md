@@ -112,7 +112,7 @@ Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 
 ### Boletos (Asaas)
 
-- No pedido finalizado, **Boletos → Configurar Asaas da loja**: ambiente (Sandbox ou Produção), API key e um token de webhook próprio (32+ caracteres), guardados cifrados. Cadastre no Asaas o webhook com a URL exibida e o mesmo token, com os eventos de cobrança.
+- Em **Minhas lojas > Boletos (Asaas)**: ambiente (Sandbox ou Produção), API key (Asaas > Integrações > Chaves de API) e um token de webhook próprio (botão "Gerar token"), guardados cifrados. Cadastre no Asaas (Integrações > Webhooks) o webhook de cobranças com a URL exibida e o mesmo token.
 - **Preparar prévia** gera as parcelas (moto) ou as 12 mensalidades (locação) para revisão; cada boleto é emitido com **Emitir boleto**.
 - **Pedidos → Boletos e inadimplência** mostra vencidos, inadimplentes, em aberto e recebidos, e os lembretes ativos de cada cliente no Asaas (os envios em si são feitos e registrados pelo Asaas).
 - `BILLING_WORKER_INTERVAL_MS` (padrão 60000; 0 desliga) controla a conferência automática.

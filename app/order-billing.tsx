@@ -1,14 +1,14 @@
 'use client';
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
 import {Button} from '@/components/ui/button';
-import {money,type OrderView} from '@/lib/domain';
+import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog';
+import {money,type OrderView,type StoreRecord} from '@/lib/domain';
 type View={config:{environment:string;notificationsEnabled:boolean;webhookPath:string|null}|null;receivables:{id:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;providerStatus:string;url:string;error:string;environment:string}[];closure:{type:string;status:string;assessment:string;damageAmount:number}|null};
 const labels:Record<string,string>={DRAFT:'Preparado',CREATING:'Enviando',UNCERTAIN:'Conferir no Asaas',OPEN:'Aguardando pagamento',OVERDUE:'Vencido',PAID:'Pago',CANCELLED:'Cancelado',REFUNDED:'Estornado',REVIEW:'Revisar no Asaas'};
 const kinds:Record<string,string>={RENT:'Mensalidade',INSTALLMENT:'Parcela',ADHESION:'Adesão',RESIDUAL:'Compra residual',DAMAGE:'Avarias'};
 const decimal=(s:string)=>{if(!/^\d+(?:[,.]\d{1,2})?$/.test(s))return NaN;const [a,b='']=s.replace(',','.').split('.');return Number(a)*100+Number(b.padEnd(2,'0'));};
 export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms:Set<string>;active:boolean;refresh:()=>Promise<unknown>}) {
  const [view,setView]=useState<View|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const [configOpen,setConfigOpen]=useState(false),[env,setEnv]=useState(''),[key,setKey]=useState(''),[secret,setSecret]=useState(''),[notify,setNotify]=useState('');
  const [first,setFirst]=useState(''),[adhesion,setAdhesion]=useState(''),[fine,setFine]=useState(''),[interest,setInterest]=useState('');
  const [closure,setClosure]=useState(''),[assessment,setAssessment]=useState(''),[damage,setDamage]=useState('0'),[extraDue,setExtraDue]=useState('');
  async function run(body?:Record<string,unknown>) {
@@ -25,16 +25,7 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
   <Button variant="outline" disabled={busy} onClick={()=>void run()}>{view?'Atualizar cobranças':'Abrir cobranças'}</Button>
   {error&&<p role="alert" className="notice error">{error}</p>}
   {view&&<>
-   <p className="muted">{view.config?`Asaas: ${view.config.environment==='SANDBOX'?'Sandbox (testes, sem quitação real)':'Produção'}`:'Asaas não configurado nesta loja.'}</p>
-   {perms.has('PAYMENT_CONFIG')&&<Button variant="outline" disabled={busy||!active} onClick={()=>{setConfigOpen(!configOpen);setEnv(view.config?.environment??'');setNotify(view.config?String(view.config.notificationsEnabled):'');}}>Configurar Asaas da loja</Button>}
-   {configOpen&&<form className="form-grid" onSubmit={async e=>{e.preventDefault();if(await run({action:'configure',environment:env,apiKey:key,webhookSecret:secret,notificationsEnabled:notify==='true'})){setKey('');setSecret('');setConfigOpen(false);}}}>
-    {label('Ambiente',<select required value={env} onChange={e=>setEnv(e.target.value)}><option value="">Selecione</option><option value="SANDBOX">Sandbox</option><option value="PRODUCTION">Produção — emite cobranças reais</option></select>)}
-    {label('Avisos conforme configuração da conta Asaas',<select required value={notify} onChange={e=>setNotify(e.target.value)}><option value="">Selecione</option><option value="true">Habilitar</option><option value="false">Desabilitar</option></select>)}
-    {label('API key (em branco mantém a salva)',<input type="password" autoComplete="new-password" value={key} onChange={e=>setKey(e.target.value)}/>)}
-    {label('Token do webhook (em branco mantém o salvo)',<input type="password" autoComplete="new-password" value={secret} onChange={e=>setSecret(e.target.value)}/>)}
-    <Button disabled={busy||!env||!notify} type="submit">Salvar configuração</Button>
-   </form>}
-   {view.config?.webhookPath&&<label className="field">URL para cadastrar no webhook Asaas<input readOnly value={typeof window==='undefined'?view.config.webhookPath:window.location.origin+view.config.webhookPath}/></label>}
+   <p className="muted">{view.config?`Asaas: ${view.config.environment==='SANDBOX'?'Sandbox (testes, sem quitação real)':'Produção'}`:'Asaas não configurado nesta loja. Configure em Minhas lojas > Boletos (Asaas).'}</p>
    {!view.receivables.length&&view.config&&order.status==='COMPLETED'&&perms.has('ORDER_CREATE')&&<form className="form-grid" onSubmit={e=>{e.preventDefault();void run({action:'prepare',firstDueDate:first,adhesionDueDate:adhesion,fineBp:decimal(fine),interestBp:decimal(interest)});}}>
     {order.type==='LOCACAO'?<>
      {label('Primeiro vencimento das 12 mensalidades',<input required type="date" value={first} onChange={e=>setFirst(e.target.value)}/>)}
@@ -121,4 +112,49 @@ export function BillingOverview({onOpenOrder}:{onOpenOrder:(orderId:string)=>voi
    </div>):<p className="muted">Nenhuma cobrança neste filtro.</p>}
   </>}
  </section>;
+}
+
+type BillingSummary={configured:boolean;environment:string;notificationsEnabled:boolean;webhookPath:string|null;updatedAt:number|null;environmentLocked:boolean};
+// Token forte para o webhook: gerado no navegador (nunca sai daqui antes de salvar) para o usuário
+// colar o mesmo valor no painel do Asaas.
+function newWebhookToken(){const a=new Uint8Array(24);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');}
+/** Minhas lojas > Boletos (Asaas): conta Asaas da loja para os boletos dos pedidos (moto e locação). */
+export function BillingConfigDialog({store,onClose}:{store:StoreRecord;onClose:()=>void}) {
+ const [summary,setSummary]=useState<BillingSummary|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false);
+ const [env,setEnv]=useState(''),[key,setKey]=useState(''),[secret,setSecret]=useState(''),[notify,setNotify]=useState(''),[showSecret,setShowSecret]=useState(false),[copied,setCopied]=useState('');
+ const call=async(body?:unknown)=>{setBusy(true);setError('');try{const r=await fetch(`/api/billing/stores/${store.id}`,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{cache:'no-store'});const d=await r.json();if(!r.ok){setError(d.error||'Não foi possível concluir.');return false}setSummary(d);if(!body){setEnv(d.environment||'');setNotify(d.configured?String(d.notificationsEnabled):'')}return true}catch{setError('Falha de comunicação.');return false}finally{setBusy(false)}};
+ useEffect(()=>{void call()},[]); // eslint-disable-line react-hooks/exhaustive-deps
+ const webhookUrl=summary?.webhookPath&&typeof window!=='undefined'?window.location.origin+summary.webhookPath:'';
+ const copy=async(text:string,what:string)=>{try{await navigator.clipboard.writeText(text);setCopied(what)}catch{setCopied('')}};
+ const save=async(e:React.FormEvent)=>{e.preventDefault();if(await call({environment:env,apiKey:key.trim()||undefined,webhookSecret:secret.trim()||undefined,notificationsEnabled:notify==='true'})){setKey('');setSaved(true)}};
+ const field=(title:React.ReactNode,node:React.ReactNode,full=false)=><label className={'field'+(full?' full':'')}>{title}{node}</label>;
+ return <Dialog open onOpenChange={o=>{if(!o)onClose()}}><DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+  <DialogHeader><DialogTitle>Boletos (Asaas) · {store.name}</DialogTitle><DialogDescription>Conta Asaas desta loja para emitir os boletos das parcelas da moto e das mensalidades da locação. Cada loja usa a própria conta.</DialogDescription></DialogHeader>
+  {error&&<div className="notice error" role="alert">{error}</div>}
+  {saved&&<div className="notice">Configuração salva.{secret?' Cadastre agora o webhook no Asaas com a URL e o token abaixo (passo 3).':''}</div>}
+  <section className="notice" style={{marginBottom:12}}>
+   <strong>Passo a passo</strong>
+   <ol style={{margin:'6px 0 0 18px',listStyle:'decimal'}}>
+    <li><strong>Teste primeiro no Sandbox:</strong> crie uma conta de testes em sandbox.asaas.com (nenhum boleto é cobrado de verdade). Quando tudo estiver certo, repita com a conta real e escolha Produção.</li>
+    <li><strong>API key:</strong> no painel do Asaas, menu Integrações &gt; Chaves de API, gere uma chave e cole abaixo.</li>
+    <li><strong>Webhook:</strong> no Asaas, Integrações &gt; Webhooks &gt; novo webhook para <em>cobranças</em>, com a URL que aparece aqui depois de salvar e o mesmo token de autenticação que você salvar abaixo (use &quot;Gerar token&quot;). É ele que avisa o OmniHub quando um boleto é pago.</li>
+    <li><strong>Lembretes:</strong> quem envia os avisos de vencimento e atraso por e-mail/WhatsApp/SMS é o próprio Asaas, conforme as notificações configuradas na conta dele.</li>
+   </ol>
+  </section>
+  {summary&&<p className="muted">{summary.configured?<>Situação: <strong>configurado · {summary.environment==='SANDBOX'?'Sandbox (testes)':'Produção'}</strong>. Campos de chave e token em branco mantêm os valores salvos.</>:<>Situação: <strong>não configurado</strong>.</>}</p>}
+  <form className="form-grid" onSubmit={save}>
+   {field('Ambiente',<select required value={env} disabled={summary?.environmentLocked} onChange={e=>setEnv(e.target.value)}><option value="">Selecione</option><option value="SANDBOX">Sandbox — testes, sem cobrança real</option><option value="PRODUCTION">Produção — emite boletos reais</option></select>)}
+   {field('Avisos do Asaas ao cliente',<select required value={notify} onChange={e=>setNotify(e.target.value)}><option value="">Selecione</option><option value="true">Enviar (conforme as notificações da conta Asaas)</option><option value="false">Não enviar</option></select>)}
+   {summary?.environmentLocked&&<p className="muted full">O ambiente não pode mais ser trocado: esta loja já tem boletos nele (a conciliação se perderia).</p>}
+   {field(summary?.configured?'API key (em branco mantém a salva)':'API key do Asaas',<input type="password" autoComplete="new-password" required={!summary?.configured} value={key} onChange={e=>setKey(e.target.value)} placeholder="$aact_..."/>,true)}
+   {field(summary?.configured?'Token do webhook (em branco mantém o salvo)':'Token de autenticação do webhook (mín. 32 caracteres)',<div className="inline" style={{gap:6}}><input className="search-input" type={showSecret?'text':'password'} autoComplete="new-password" required={!summary?.configured} minLength={32} maxLength={255} value={secret} onChange={e=>setSecret(e.target.value)}/><Button type="button" size="sm" variant="outline" onClick={()=>{setSecret(newWebhookToken());setShowSecret(true)}}>Gerar token</Button>{secret&&<Button type="button" size="sm" variant="outline" onClick={()=>void copy(secret,'token')}>{copied==='token'?'Copiado':'Copiar'}</Button>}</div>,true)}
+   {secret&&<p className="muted full">Copie este token antes de salvar: depois de salvo ele não é mostrado de novo. Cole o mesmo valor no campo &quot;Token de autenticação&quot; do webhook no Asaas.</p>}
+   <div className="form-actions full" style={{marginTop:0}}><Button disabled={busy||!env||!notify}>{busy?'Salvando...':'Salvar configuração'}</Button></div>
+  </form>
+  {webhookUrl&&<div className="field full" style={{marginTop:12}}>URL do webhook (cadastre no Asaas com os eventos de cobrança)
+   <div className="inline" style={{gap:6}}><input className="search-input" readOnly value={webhookUrl} onFocus={e=>e.currentTarget.select()}/><Button type="button" size="sm" variant="outline" onClick={()=>void copy(webhookUrl,'url')}>{copied==='url'?'Copiado':'Copiar'}</Button></div></div>}
+  <section className="muted" style={{marginTop:12}}>
+   <strong>Como usar depois de configurado:</strong> finalize o pedido na loja (aba Pedidos) → abra o pedido → Boletos → <em>Abrir cobranças</em> → <em>Preparar prévia dos boletos</em> (confira vencimentos e valores) → <em>Emitir boleto</em> em cada parcela. O link de cada boleto aparece ali para enviar ao cliente, e o painel <em>Boletos e inadimplência</em> da aba Pedidos mostra o que está vencido.
+  </section>
+ </DialogContent></Dialog>;
 }

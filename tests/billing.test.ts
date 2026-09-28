@@ -7,7 +7,7 @@ import {createStore,createProduct} from '../lib/catalog/service.ts';
 import {createCustomer} from '../lib/customers/service.ts';
 import {registerUnit,createOrder,completeOrder} from '../lib/orders/service.ts';
 import {openSession} from '../lib/cash/service.ts';
-import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders} from '../lib/billing/service.ts';
+import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders,getBillingConfigSummary} from '../lib/billing/service.ts';
 import type {Actor} from '../lib/domain.ts';
 import type {AsaasPayment,BillingFetch} from '../lib/billing/asaas.ts';
 const now=Date.UTC(2026,8,26,15);
@@ -134,4 +134,15 @@ test('lembretes: mostra configuração do Asaas; webhook de evento sem cobrança
  const cfg=await f.db.prepare('SELECT webhook_key AS key FROM order_billing_configs WHERE store_id=?').bind(f.store).first<{key:string}>();
  assert.equal(await receiveAsaasEvent(f.db,cfg!.key,'MOCK-webhook-secret-at-least-32-characters',{id:'evt_transfer',event:'TRANSFER_DONE',transfer:{id:'tra_1'}},now),200);
  const n=await f.db.prepare('SELECT COUNT(*) AS n FROM asaas_events').bind().first<{n:number}>();assert.equal(Number(n!.n),0);
+});
+
+test('resumo da configuração por loja: nunca devolve segredos e trava o ambiente após o primeiro boleto',async()=>{
+ const f=await fixture();
+ const s1=await getBillingConfigSummary(f.db,f.tenant,f.store,f.actor);
+ assert.equal(s1.configured,true);assert.equal(s1.environment,'SANDBOX');assert.equal(s1.environmentLocked,false);
+ assert.ok(!JSON.stringify(s1).includes('MOCK-asaas-token')&&!JSON.stringify(s1).includes('MOCK-webhook-secret'));
+ assert.match(String(s1.webhookPath),/^\/api\/billing\/asaas\/webhook\/[a-f0-9]{48}$/);
+ await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
+ assert.equal((await getBillingConfigSummary(f.db,f.tenant,f.store,f.actor)).environmentLocked,true);
+ await assert.rejects(()=>getBillingConfigSummary(f.db,f.tenant,f.store,{...f.actor,permissions:permissionsForRole('OPERADOR_CAIXA')}),/permiss/i);
 });

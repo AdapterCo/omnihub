@@ -39,6 +39,14 @@ export async function saveBillingConfig(db: D1Database, tenant: string, store: s
  await db.prepare(`INSERT INTO order_billing_configs (store_id,tenant_id,environment,api_key_enc,webhook_secret_enc,webhook_key,notifications_enabled,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(store_id) DO UPDATE SET environment=excluded.environment,api_key_enc=excluded.api_key_enc,webhook_secret_enc=excluded.webhook_secret_enc,notifications_enabled=excluded.notifications_enabled,updated_at=excluded.updated_at`).bind(store,tenant,input.environment,key?enc(key):old!.api_key_enc,secret?enc(secret):old!.webhook_secret_enc,old?.webhook_key??randomBytes(24).toString('hex'),input.notificationsEnabled?1:0,now).run();
  await recordAudit(db,{tenantId:tenant,storeId:store,userId:actor.userId,operator:actor.displayName,action:'billing.config',description:'Configuração Asaas atualizada',entity:'store',entityId:store},now);
 }
+/** Resumo da configuração Asaas da loja para a tela (nunca devolve API key nem token do webhook). */
+export async function getBillingConfigSummary(db: D1Database, tenant: string, store: string, actor: Actor) {
+ requirePermission(actor.permissions,'PAYMENT_CONFIG'); requireStoreAccess(actor,store);
+ if (!await db.prepare('SELECT id FROM stores WHERE id = ? AND tenant_id = ?').bind(store,tenant).first()) throw new RuleError('Loja não encontrada.',404);
+ const c=await db.prepare('SELECT environment, webhook_key AS webhookKey, notifications_enabled AS notificationsEnabled, updated_at AS updatedAt FROM order_billing_configs WHERE tenant_id = ? AND store_id = ?').bind(tenant,store).first<{environment:string;webhookKey:string;notificationsEnabled:number;updatedAt:number}>();
+ const issued=await db.prepare("SELECT id FROM order_receivables WHERE store_id = ? AND tenant_id = ? LIMIT 1").bind(store,tenant).first();
+ return c?{configured:true,environment:c.environment,notificationsEnabled:!!c.notificationsEnabled,webhookPath:`/api/billing/asaas/webhook/${c.webhookKey}`,updatedAt:Number(c.updatedAt),environmentLocked:!!issued}:{configured:false,environment:'',notificationsEnabled:false,webhookPath:null,updatedAt:null,environmentLocked:false};
+}
 export async function billingView(db: D1Database, tenant: string, id: string, actor: Actor) {
  const o=await orderScope(db,tenant,id,actor);
  const c=await db.prepare('SELECT environment, webhook_key AS webhookKey, notifications_enabled AS notificationsEnabled FROM order_billing_configs WHERE tenant_id = ? AND store_id = ?').bind(tenant,o.store_id).first<{environment:string;webhookKey:string;notificationsEnabled:number}>();
