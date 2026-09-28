@@ -117,7 +117,7 @@ test('pedido de venda (moto): reserva a unidade, valida condições, finaliza na
     await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix' }, f.seller, NOW), /primeiro vencimento/);
     await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', firstDueDate: '2026-09-01' }, f.seller, NOW), /passado/);
     await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Cheque', firstDueDate: '2026-10-26' }, f.seller, NOW), /Dinheiro, Pix ou Cartão/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, type: 'LOCACAO', adhesionAmount: 1, monthlyAmount: 1, dueDay: 5, adhesionBilling: 'BOLETO' }, f.seller, NOW), /modalidade de locação/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, type: 'LOCACAO', adhesionAmount: 1, monthlyAmount: 1, firstDueDate: '2026-10-05', adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW), /modalidade de locação/);
 
     const orderId = await createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', firstDueDate: '2026-10-26' }, f.seller, NOW);
     assert.deepEqual(await f.unitStatus(unit), { status: 'RESERVED', orderId });
@@ -163,10 +163,15 @@ test('pedido de locação: adesão na loja em dinheiro entra no caixa, equipamen
     const f = await fixture();
     const unit = await registerUnit(f.db, f.tenantId, { storeId: f.cellStore, productId: f.phone, serial: '356938035643809', color: 'Azul', memory: '128 GB', condition: 'Seminovo' }, f.owner, NOW);
     const base = { storeId: f.cellStore, type: 'LOCACAO' as const, customerId: f.customerId, unitId: unit };
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 31, adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW), /1 a 28/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 10 } as never, f.seller, NOW), /boleto ou na loja/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 10, adhesionBilling: 'LOJA' }, f.seller, NOW), /forma de pagamento da adesão/);
-    const orderId = await createOrder(f.db, f.tenantId, { ...base, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 10, adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW);
+    const rent = { adhesionAmount: 30000, monthlyAmount: 25000, adhesionPaymentMethod: 'Dinheiro' };
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, ...rent }, f.seller, NOW), /1ª mensalidade/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, ...rent, firstDueDate: '2026-10-31' }, f.seller, NOW), /dias 1 e 28/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, ...rent, firstDueDate: '2026-09-01' }, f.seller, NOW), /passado/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, ...rent, firstDueDate: '2026-10-10', adhesionBilling: 'BOLETO' }, f.seller, NOW), /não gera boleto/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, adhesionAmount: 30000, monthlyAmount: 25000, firstDueDate: '2026-10-10' }, f.seller, NOW), /forma de pagamento da adesão/);
+    const orderId = await createOrder(f.db, f.tenantId, { ...base, ...rent, firstDueDate: '2026-10-10' }, f.seller, NOW);
+    const saved = await f.db.prepare('SELECT due_day AS d, first_due_date AS f, adhesion_billing AS b FROM orders WHERE id = ?').bind(orderId).first<{ d: number; f: string; b: string }>();
+    assert.deepEqual({ d: Number(saved!.d), f: saved!.f, b: saved!.b }, { d: 10, f: '2026-10-10', b: 'LOJA' }, 'dia de vencimento vem da 1ª mensalidade; adesão sempre na loja');
     const session = await openSession(f.db, f.tenantId, f.cellStore, 10000, f.seller, NOW);
     const { saleId } = await completeOrder(f.db, f.tenantId, orderId, f.seller, NOW);
     assert.equal(saleId, null, 'locação não é venda');

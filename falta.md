@@ -338,6 +338,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Limpeza de registros de controle (melhoria 5 da varredura, 2026-09-27)** | **Concluído** | Eventos de webhook resolvidos apagados após 90 dias; desafios de login e links de senha vencidos apagados; worker a cada 6 h. As 5 melhorias da varredura concluídas. |
 | **Configuração do Asaas no card da loja (2026-09-27)** | **Concluído** | Minhas lojas > Boletos (Asaas) com passo a passo, gerar/copiar token, URL do webhook e roteiro de uso; a configuração saiu de dentro do pedido. |
 | **Asaas no Sandbox real + aba Boletos e inadimplência + emitir todos + PDF único (2026-09-27/28)** | **Concluído (webhook a validar na VPS)** | Motivo da recusa do Asaas na tela; externalReference ≤ 100; recusa 4xx volta a Preparado; aba Boletos e inadimplência com filtros claros e contagens; emitir todos; PDF único salvo em Documentos. Validado no Sandbox real (12 boletos + PDF de 12 páginas). |
+| **Locação: 1ª mensalidade no pedido e adesão só na loja (2026-09-28)** | **Concluído** | Data da 1ª mensalidade escolhida no pedido (dia de vencimento derivado dela); adesão sempre paga na loja; prévia sem datas digitadas, exatamente 12 boletos na locação. |
 
 ---
 

@@ -40,7 +40,7 @@ async function fixture(type:'VENDA'|'LOCACAO'='VENDA') {
  const product=await createProduct(db,tenant,{name:'Produto MOCK',sku:'MOCK',price:10000,cost:1,minimum:0,unit:'UN',kind:type==='VENDA'?'MOTO':'LOCACAO'} as never,actor);
  const customer=await createCustomer(db,tenant,{name:'Pessoa MOCK',docType:'CPF',document:'52998224725'},actor);
  const unit=await registerUnit(db,tenant,{storeId:store,productId:product,serial:type==='VENDA'?'MOCK-123':'123456789012345',color:'Preto',memory:'128',condition:'Novo'},actor,now);
- const id=await createOrder(db,tenant,{storeId:store,type,customerId:customer,unitId:unit,total:10001,purchaseDate:'2026-09-26',downPayment:0,installments:3,firstDueDate:'2026-10-31',adhesionAmount:1000,adhesionBilling:'LOJA',adhesionPaymentMethod:'Dinheiro',monthlyAmount:9000,dueDay:10},actor,now);
+ const id=await createOrder(db,tenant,{storeId:store,type,customerId:customer,unitId:unit,total:10001,purchaseDate:'2026-09-26',downPayment:0,installments:3,firstDueDate:type==='VENDA'?'2026-10-31':'2026-10-10',adhesionAmount:1000,adhesionBilling:'LOJA',adhesionPaymentMethod:'Dinheiro',monthlyAmount:9000,dueDay:10},actor,now);
  await openSession(db,tenant,store,0,actor,now);
  await completeOrder(db,tenant,id,actor,now);
  await saveBillingConfig(db,tenant,store,{environment:'SANDBOX',apiKey:'MOCK-asaas-token',webhookSecret:'MOCK-webhook-secret-at-least-32-characters',notificationsEnabled:false},actor,now);
@@ -76,10 +76,14 @@ test('duplo clique, valor divergente e webhook falso não quitam a cobrança',as
  for(let i=0;i<2;i++)assert.equal(await receiveAsaasEvent(f.db,cfg!.key,'MOCK-webhook-secret-at-least-32-characters',{id:'evt_1',payment:{id:p.id}},now),200);
  const n=await f.db.prepare('SELECT COUNT(*) AS n FROM asaas_events').bind().first<{n:number}>();assert.equal(Number(n!.n),1);
 });
-test('locação prepara 12 mensalidades e exige dia definido no contrato',async()=>{
- const f=await fixture('LOCACAO');await assert.rejects(()=>prepareSchedule(f.db,f.tenant,f.id,{firstDueDate:'2026-10-11'},f.actor,now),/dia do contrato/);
- await prepareSchedule(f.db,f.tenant,f.id,{firstDueDate:'2026-10-10'},f.actor,now);
- const rows=await f.db.prepare('SELECT fine_bp AS fine,interest_bp AS interest FROM order_receivables WHERE order_id=?').bind(f.id).all<{fine:number;interest:number}>();assert.equal(rows.results.length,12);assert.ok(rows.results.every(r=>Number(r.fine)===200&&Number(r.interest)===100));
+test('locação: exatamente 12 mensalidades a partir da data do pedido, sem boleto de adesão',async()=>{
+ const f=await fixture('LOCACAO');
+ // A data digitada na prévia é ignorada: vale a do pedido (escolhida pelo vendedor).
+ await prepareSchedule(f.db,f.tenant,f.id,{firstDueDate:'2027-05-20'},f.actor,now);
+ const rows=await f.db.prepare('SELECT kind,due_date AS due,fine_bp AS fine,interest_bp AS interest FROM order_receivables WHERE order_id=? ORDER BY due_date').bind(f.id).all<{kind:string;due:string;fine:number;interest:number}>();
+ assert.equal(rows.results.length,12);assert.ok(rows.results.every(r=>r.kind==='RENT'));
+ assert.equal(rows.results[0].due,'2026-10-10');assert.equal(rows.results[11].due,'2027-09-10');
+ assert.ok(rows.results.every(r=>Number(r.fine)===200&&Number(r.interest)===100));
  await assert.rejects(()=>closeRental(f.db,f.tenant,f.id,{type:'RETURN',assessment:'Aparelho em bom estado',damageAmount:0},f.actor,f.mock.fetcher,now),/contrato.*assinado/);
 });
 

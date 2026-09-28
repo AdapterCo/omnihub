@@ -136,7 +136,7 @@ test('contrato da moto: PDF com dados reais, garantia calculada, marcadores como
 test('contrato de locação: CNPJ corrigido, MINUTA, 12 mensalidades, data por extenso, CPF na assinatura', async () => {
     const f = await fixture();
     const unit = await registerUnit(f.db, f.tenantId, { storeId: f.cell, productId: f.phone, serial: '356938035643809', color: 'Azul', memory: '128 GB', condition: 'Seminovo' }, f.owner, NOW);
-    const orderId = await createOrder(f.db, f.tenantId, { storeId: f.cell, type: 'LOCACAO', customerId: f.customerId, unitId: unit, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 10, adhesionBilling: 'BOLETO' }, f.seller, NOW);
+    const orderId = await createOrder(f.db, f.tenantId, { storeId: f.cell, type: 'LOCACAO', customerId: f.customerId, unitId: unit, adhesionAmount: 30000, monthlyAmount: 25000, firstDueDate: '2026-10-10', adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW);
     const result = await generateContract(f.db, f.storage, f.tenantId, orderId, f.seller, NOW);
     const { text, pages } = await pdfText((await readDocument(f.db, f.storage, f.tenantId, result.documentId, f.seller)).bytes);
     assert.ok(pages >= 5, 'contrato longo paginado');
@@ -174,7 +174,7 @@ test('contrato bloqueia: loja com outro CNPJ, dados faltando (lista objetiva), l
 
     const cnpjCustomer = await createCustomer(f.db, f.tenantId, { name: 'Empresa X', document: '11222333000181', docType: 'CNPJ', email: 'x@x.com', phone: '2433334444', zip: '27260000', address: 'Rua B', number: '2', district: 'Centro', city: 'Volta Redonda', state: 'RJ' }, f.owner);
     const unit = await registerUnit(f.db, f.tenantId, { storeId: f.cell, productId: f.phone, serial: '490154203237518', color: 'Preto', memory: '64 GB', condition: 'Novo' }, f.owner, NOW);
-    const rent = await createOrder(f.db, f.tenantId, { storeId: f.cell, type: 'LOCACAO', customerId: cnpjCustomer, unitId: unit, adhesionAmount: 30000, monthlyAmount: 25000, dueDay: 5, adhesionBilling: 'BOLETO' }, f.seller, NOW);
+    const rent = await createOrder(f.db, f.tenantId, { storeId: f.cell, type: 'LOCACAO', customerId: cnpjCustomer, unitId: unit, adhesionAmount: 30000, monthlyAmount: 25000, firstDueDate: '2026-10-05', adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW);
     await assert.rejects(() => generateContract(f.db, f.storage, f.tenantId, rent, f.seller, NOW), /CPF do cliente \(a locação exige CPF\)/);
 });
 

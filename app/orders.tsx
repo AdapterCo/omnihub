@@ -36,6 +36,7 @@ const CONTRACT_STATUS: Record<string, { label: string; tone: string }> = {
 };
 // Status que ainda permitem gerar uma revisão nova do contrato (nada pendente no Adapter Sign).
 const REGENERABLE = ['GENERATED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
+export function addMonthsKey(key: string, months: number): string { const [y, m, d] = key.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1 + months, 1)); const last = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth() + 1, 0)).getUTCDate(); return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`; }
 const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign', BOLETOS: 'Boletos (arquivo único)' };
 const ACCEPT = 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png';
 
@@ -119,7 +120,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
    Object.assign(terms, { total: toCents(v.total), purchaseDate: v.purchaseDate, installments, downPayment: installments === 0 ? toCents(v.total) : toCents(v.downPayment || '0'), downPaymentMethod: v.downPaymentMethod || undefined });
    if (installments > 0) terms.firstDueDate = v.firstDueDate;
   } else {
-   Object.assign(terms, { adhesionAmount: toCents(v.adhesionAmount), monthlyAmount: toCents(v.monthlyAmount), dueDay: Number(v.dueDay), adhesionBilling: v.adhesionBilling || undefined, adhesionPaymentMethod: v.adhesionBilling === 'LOJA' ? v.adhesionPaymentMethod || undefined : undefined });
+   Object.assign(terms, { adhesionAmount: toCents(v.adhesionAmount), monthlyAmount: toCents(v.monthlyAmount), firstDueDate: v.firstDueDate, adhesionBilling: 'LOJA', adhesionPaymentMethod: v.adhesionPaymentMethod || undefined });
   }
   for (const value of Object.values(terms)) if (typeof value === 'number' && Number.isNaN(value)) { setError('Confira os valores em R$ (use vírgula para os centavos).'); return; }
   const result = await act(order ? { type: 'order.update', id: order.id, ...terms } : { type: 'order.create', storeId: v.storeId, orderType: type, ...terms }) as { resultId?: string } | null;
@@ -142,11 +143,10 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
    </>}
    {type === 'LOCACAO' && <>
     <Field label="Valor da adesão (R$)"><input inputMode="decimal" value={v.adhesionAmount ?? ''} onChange={(e) => set('adhesionAmount', e.target.value)} /></Field>
-    <Field label="Cobrança da adesão"><NativePick value={v.adhesionBilling ?? ''} onChange={(x) => set('adhesionBilling', x)} options={[{ value: 'BOLETO', label: 'Boleto (Asaas)' }, { value: 'LOJA', label: 'Paga na loja' }]} /></Field>
-    {v.adhesionBilling === 'LOJA' && <Field label="Forma de pagamento da adesão"><NativePick value={v.adhesionPaymentMethod ?? ''} onChange={(x) => set('adhesionPaymentMethod', x)} options={STORE_METHODS.map((m) => ({ value: m, label: m }))} /></Field>}
+    <Field label="Forma de pagamento da adesão" hint="A adesão é paga na loja, no ato da assinatura (não gera boleto)."><NativePick value={v.adhesionPaymentMethod ?? ''} onChange={(x) => set('adhesionPaymentMethod', x)} options={STORE_METHODS.map((m) => ({ value: m, label: m }))} /></Field>
     <Field label="Mensalidade (R$)"><input inputMode="decimal" value={v.monthlyAmount ?? ''} onChange={(e) => set('monthlyAmount', e.target.value)} /></Field>
-    <Field label="Dia de vencimento (1 a 28)"><input type="number" min={1} max={28} value={v.dueDay ?? ''} onChange={(e) => set('dueDay', e.target.value)} /></Field>
-    <p className="muted full">Contrato de locação v1: 12 mensalidades, geradas todas de uma vez no boleto na etapa de cobrança.</p>
+    <Field label="Vencimento da 1ª mensalidade" hint="Combinado com o cliente (dia 1 a 28). As outras 11 vencem no mesmo dia dos meses seguintes."><input type="date" value={v.firstDueDate ?? ''} onChange={(e) => set('firstDueDate', e.target.value)} /></Field>
+    {v.firstDueDate && /^\d{4}-\d{2}-\d{2}$/.test(v.firstDueDate) && <p className="muted full">12 boletos de mensalidade: de {brDate(v.firstDueDate)} a {brDate(addMonthsKey(v.firstDueDate, 11))}, todo dia {Number(v.firstDueDate.slice(8, 10))}. Gerados todos de uma vez na etapa de cobrança.</p>}
    </>}
    {error && <p className="notice error full">{error}</p>}
   </fieldset>
@@ -171,7 +171,7 @@ function OrderDetail({ order, contracts, documents, act, refresh, perms, busy, a
    ['Pagamento', order.installments ? `Entrada ${money(order.downPayment)}${order.downPaymentMethod ? ` (${order.downPaymentMethod})` : ''} + ${order.installments}x no boleto, 1º vencimento ${brDate(order.firstDueDate)}` : `À vista na loja (${order.downPaymentMethod})`],
   ] as [string, ReactNode][] : [
    ['Adesão', `${money(order.adhesionAmount)} · ${order.adhesionBilling === 'BOLETO' ? 'boleto' : `na loja (${order.adhesionPaymentMethod})`}`],
-   ['Mensalidades', `12x ${money(order.monthlyAmount)}, todo dia ${order.dueDay}`],
+   ['Mensalidades', order.firstDueDate ? `12x ${money(order.monthlyAmount)}, de ${brDate(order.firstDueDate)} a ${brDate(addMonthsKey(order.firstDueDate, 11))} (todo dia ${order.dueDay})` : `12x ${money(order.monthlyAmount)}, todo dia ${order.dueDay}`],
   ] as [string, ReactNode][]),
   ['Criado em', date(order.createdAt)],
   ...(order.completedAt ? [['Finalizado em', date(order.completedAt)]] as [string, ReactNode][] : []),

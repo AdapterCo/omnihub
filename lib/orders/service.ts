@@ -190,15 +190,19 @@ function validateTerms(type: OrderType, input: OrderInput, now: number): OrderTe
  if (!(adhesion > 0) || adhesion > 100000000) throw new RuleError('Informe o valor da adesão.', 400);
  const monthly = cents(input.monthlyAmount);
  if (!(monthly > 0) || monthly > 100000000) throw new RuleError('Informe o valor da mensalidade.', 400);
- const dueDay = input.dueDay ?? 0;
- // Dias 29–31 não existem em todos os meses; limitar a 28 evita presumir para qual dia o
- // vencimento "escorrega". Limitação técnica registrada, ajustável se o negócio definir a regra.
- if (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 28) throw new RuleError('Informe o dia de vencimento das mensalidades (1 a 28).', 400);
- const billing = input.adhesionBilling;
- if (billing !== 'BOLETO' && billing !== 'LOJA') throw new RuleError('Informe como a adesão será cobrada: boleto ou na loja.', 400);
+ // A 1ª mensalidade é combinada com o cliente e escolhida pelo vendedor (decisão do usuário); as
+ // outras 11 vencem no mesmo dia dos meses seguintes (cláusula 2.2: "todo dia X de cada mês").
+ const firstDueDate = String(input.firstDueDate ?? '');
+ if (!validDate(firstDueDate)) throw new RuleError('Informe a data da 1ª mensalidade (combinada com o cliente).', 400);
+ if (firstDueDate < dayKey(now)) throw new RuleError('A 1ª mensalidade não pode estar no passado.', 400);
+ const dueDay = Number(firstDueDate.slice(8, 10));
+ // Dias 29–31 não existem em todos os meses: com eles, o vencimento "escorregaria" em alguns meses.
+ if (dueDay > 28) throw new RuleError('Escolha a 1ª mensalidade entre os dias 1 e 28: os meses mais curtos não têm os dias 29 a 31.', 400);
+ // Adesão é paga na loja, no ato da assinatura (cláusula 2.1); nunca vira boleto (decisão do usuário).
+ if (input.adhesionBilling === 'BOLETO') throw new RuleError('A adesão é paga na loja, no ato da assinatura; ela não gera boleto.', 400);
  const method = String(input.adhesionPaymentMethod ?? '').trim();
- if (billing === 'LOJA' && !(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento da adesão na loja (Dinheiro, Pix ou Cartão).', 400);
- return { total: 0, purchase_date: '', down_payment: 0, down_payment_method: '', installments: 0, first_due_date: '', adhesion_amount: adhesion, adhesion_billing: billing, adhesion_payment_method: billing === 'LOJA' ? method : '', monthly_amount: monthly, due_day: dueDay };
+ if (!(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento da adesão na loja (Dinheiro, Pix ou Cartão).', 400);
+ return { total: 0, purchase_date: '', down_payment: 0, down_payment_method: '', installments: 0, first_due_date: firstDueDate, adhesion_amount: adhesion, adhesion_billing: 'LOJA', adhesion_payment_method: method, monthly_amount: monthly, due_day: dueDay };
 }
 
 async function loadUnitForOrder(db: D1Database, tenantId: string, unitId: string) {
@@ -336,6 +340,8 @@ export async function completeOrder(db: D1Database, tenantId: string, id: string
  const order = await loadOrder(db, tenantId, id);
  requireStoreAccess(actor, order.store_id);
  if (order.status !== 'OPEN') throw new RuleError(order.status === 'COMPLETED' ? 'Pedido já finalizado.' : 'Pedido cancelado não pode ser finalizado.', 409);
+ // Pedidos de locação criados antes da regra atual: pedir a correção em vez de presumir.
+ if (order.type === 'LOCACAO' && (!order.first_due_date || order.adhesion_billing !== 'LOJA')) throw new RuleError('Edite o pedido antes de finalizar: informe a data da 1ª mensalidade e a forma de pagamento da adesão na loja (a adesão não gera mais boleto).', 409);
  const customer = await db.prepare('SELECT name, document FROM customers WHERE id = ? AND tenant_id = ?').bind(order.customer_id, tenantId).first<{ name: string; document: string }>();
  if (!customer) throw new RuleError('Cliente do pedido não encontrado.', 404);
  const session = await findOpenSessionForUser(db, tenantId, order.store_id, actor.userId);

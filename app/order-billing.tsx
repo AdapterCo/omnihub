@@ -4,13 +4,14 @@ import {Button} from '@/components/ui/button';
 import {FileDown,Layers,LoaderCircle,RefreshCw} from 'lucide-react';
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {money,type OrderView,type StoreRecord} from '@/lib/domain';
+import {addMonthsKey} from './orders';
 type View={config:{environment:string;notificationsEnabled:boolean;webhookPath:string|null}|null;receivables:{id:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;providerStatus:string;url:string;error:string;environment:string}[];closure:{type:string;status:string;assessment:string;damageAmount:number}|null};
 const labels:Record<string,string>={DRAFT:'Preparado',CREATING:'Enviando',UNCERTAIN:'Conferir no Asaas',OPEN:'Aguardando pagamento',OVERDUE:'Vencido',PAID:'Pago',CANCELLED:'Cancelado',REFUNDED:'Estornado',REVIEW:'Revisar no Asaas'};
 const kinds:Record<string,string>={RENT:'Mensalidade',INSTALLMENT:'Parcela',ADHESION:'Adesão',RESIDUAL:'Compra residual',DAMAGE:'Avarias'};
 const decimal=(s:string)=>{if(!/^\d+(?:[,.]\d{1,2})?$/.test(s))return NaN;const [a,b='']=s.replace(',','.').split('.');return Number(a)*100+Number(b.padEnd(2,'0'));};
 export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms:Set<string>;active:boolean;refresh:()=>Promise<unknown>}) {
  const [view,setView]=useState<View|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
- const [first,setFirst]=useState(''),[adhesion,setAdhesion]=useState(''),[fine,setFine]=useState(''),[interest,setInterest]=useState('');
+ const [first,setFirst]=useState(''),[fine,setFine]=useState(''),[interest,setInterest]=useState('');
  const [closure,setClosure]=useState(''),[assessment,setAssessment]=useState(''),[damage,setDamage]=useState('0'),[extraDue,setExtraDue]=useState('');
  const [notice,setNotice]=useState(''),[merged,setMerged]=useState<{documentId:string;count:number}|null>(null);
  // Devolve a resposta da rota (ou null em erro), para as ações em lote lerem o resultado.
@@ -30,12 +31,13 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
   {notice&&<p className="notice">{notice}</p>}
   {view&&<>
    <p className="muted">{view.config?`Asaas: ${view.config.environment==='SANDBOX'?'Sandbox (testes, sem quitação real)':'Produção'}`:'Asaas não configurado nesta loja. Configure em Minhas lojas > Boletos (Asaas).'}</p>
-   {!view.receivables.length&&view.config&&order.status==='COMPLETED'&&perms.has('ORDER_CREATE')&&<form className="form-grid" onSubmit={e=>{e.preventDefault();void run({action:'prepare',firstDueDate:first,adhesionDueDate:adhesion,fineBp:decimal(fine),interestBp:decimal(interest)});}}>
+   {!view.receivables.length&&view.config&&order.status==='COMPLETED'&&perms.has('ORDER_CREATE')&&<form className="form-grid" onSubmit={e=>{e.preventDefault();void run({action:'prepare',firstDueDate:order.firstDueDate||first,fineBp:decimal(fine),interestBp:decimal(interest)});}}>
     {order.type==='LOCACAO'?<>
-     {label('Primeiro vencimento das 12 mensalidades',<input required type="date" value={first} onChange={e=>setFirst(e.target.value)}/>)}
-     {order.adhesionBilling==='BOLETO'&&label('Vencimento da adesão',<input required type="date" value={adhesion} onChange={e=>setAdhesion(e.target.value)}/>)}
+     {order.firstDueDate?<p className="full"><strong>12 mensalidades de {money(order.monthlyAmount)}</strong>, de {order.firstDueDate.split('-').reverse().join('/')} a {addMonthsKey(order.firstDueDate,11).split('-').reverse().join('/')} (todo dia {order.dueDay}), conforme o pedido. A adesão é paga na loja e não gera boleto.</p>
+      :label('Primeiro vencimento das 12 mensalidades (pedido antigo, sem a data)',<input required type="date" value={first} onChange={e=>setFirst(e.target.value)}/>)}
      <p className="muted full">Contrato v1: multa de 2% e juros de 1% ao mês.</p>
     </>:<>
+     <p className="full"><strong>{order.installments} parcela(s)</strong> a partir de {order.firstDueDate?order.firstDueDate.split('-').reverse().join('/'):'—'}, conforme o pedido (valor financiado {money(order.total-order.downPayment)}).</p>
      {label('Multa por atraso (%) — informe 0 se não houver',<input required inputMode="decimal" value={fine} onChange={e=>setFine(e.target.value)}/>)}
      {label('Juros por atraso (% ao mês)',<input required inputMode="decimal" value={interest} onChange={e=>setInterest(e.target.value)}/>)}
     </>}

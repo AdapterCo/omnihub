@@ -74,7 +74,8 @@ export async function prepareSchedule(db: D1Database, tenant: string, id: string
  if (await db.prepare("SELECT id FROM order_receivables WHERE order_id = ? AND kind IN ('INSTALLMENT','RENT','ADHESION') LIMIT 1").bind(id).first()) return;
  const count=o.type==='LOCACAO'?12:Number(o.installments);
  if (!count) throw new RuleError('Este pedido não tem parcelas no boleto.',409);
- const first=o.type==='LOCACAO'?String(input.firstDueDate??''):o.first_due_date;
+ // A 1ª data vem do pedido (escolhida pelo vendedor). Só pedidos de locação antigos, sem ela, usam a informada na prévia.
+ const first=o.first_due_date||(o.type==='LOCACAO'?String(input.firstDueDate??''):'');
  if (!validBillingDate(first) || first<dayKey(now)) throw new RuleError('Informe o primeiro vencimento, sem data passada.',400);
  if (o.type==='LOCACAO' && Number(first.slice(-2))!==Number(o.due_day)) throw new RuleError('O primeiro vencimento deve respeitar o dia do contrato.',400);
  const fine=o.type==='LOCACAO'?200:input.fineBp, interest=o.type==='LOCACAO'?100:input.interestBp;
@@ -83,10 +84,7 @@ export async function prepareSchedule(db: D1Database, tenant: string, id: string
  const unit=Math.floor(total/count);
  if (unit<1) throw new RuleError('Valor de parcela inválido.',400);
  const entries=monthlyDates(first,count).map((due,i)=>({kind:o.type==='LOCACAO'?'RENT':'INSTALLMENT',sequence:i+1,amount:i===count-1?total-unit*(count-1):unit,due}));
- if(o.type==='LOCACAO' && o.adhesion_billing==='BOLETO') {
-  const due=String(input.adhesionDueDate??''); if(!validBillingDate(due)||due<dayKey(now)) throw new RuleError('Informe o vencimento do boleto de adesão.',400);
-  entries.unshift({kind:'ADHESION',sequence:1,amount:Number(o.adhesion_amount),due});
- }
+ // Adesão não gera boleto: é paga na loja no ato (decisão do usuário). Locação = 12 boletos.
  await db.batch(entries.map(e=>db.prepare(`INSERT INTO order_receivables (id,tenant_id,store_id,order_id,customer_id,kind,sequence,amount,due_date,fine_bp,interest_bp,environment,status,external_ref,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'DRAFT',?,?,?) ON CONFLICT(order_id,kind,sequence) DO NOTHING`).bind(crypto.randomUUID(),tenant,o.store_id,id,o.customer_id,e.kind,e.sequence,e.amount,e.due,fine,interest,c.environment,`omnihub-${id}-${e.kind}-${e.sequence}`,now,now)));
  await audit(db,tenant,o,actor,'billing.prepare','Cronograma de boletos preparado para revisão',now);
 }
