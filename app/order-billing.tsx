@@ -1,6 +1,7 @@
 'use client';
 import {useEffect,useState} from 'react';
 import {Button} from '@/components/ui/button';
+import {FileDown,Layers,LoaderCircle,RefreshCw} from 'lucide-react';
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog';
 import {money,type OrderView,type StoreRecord} from '@/lib/domain';
 type View={config:{environment:string;notificationsEnabled:boolean;webhookPath:string|null}|null;receivables:{id:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;providerStatus:string;url:string;error:string;environment:string}[];closure:{type:string;status:string;assessment:string;damageAmount:number}|null};
@@ -11,19 +12,22 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
  const [view,setView]=useState<View|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [first,setFirst]=useState(''),[adhesion,setAdhesion]=useState(''),[fine,setFine]=useState(''),[interest,setInterest]=useState('');
  const [closure,setClosure]=useState(''),[assessment,setAssessment]=useState(''),[damage,setDamage]=useState('0'),[extraDue,setExtraDue]=useState('');
- async function run(body?:Record<string,unknown>) {
-  setBusy(true);setError('');
+ const [notice,setNotice]=useState(''),[merged,setMerged]=useState<{documentId:string;count:number}|null>(null);
+ // Devolve a resposta da rota (ou null em erro), para as ações em lote lerem o resultado.
+ async function run(body?:Record<string,unknown>):Promise<Record<string,unknown>|null> {
+  setBusy(true);setError('');setNotice('');
   try {
    const r=await fetch(`/api/billing/orders/${order.id}`,body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{});
-   const data=await r.json();if(!r.ok){setError(data.error||'Operação não concluída.');return false;}setView(data);
-   if(body){await refresh();}return true;
-  }catch{setError('Falha de comunicação. Atualize a situação antes de repetir.');return false;}
+   const data=await r.json();if(!r.ok){setError(data.error||'Operação não concluída.');return null;}setView(data);
+   if(body){await refresh();}return data;
+  }catch{setError('Falha de comunicação. Atualize a situação antes de repetir.');return null;}
   finally{setBusy(false);}
  }
  const label=(title:string,node:React.ReactNode)=><label className="field">{title}{node}</label>;
  return <section className="stack"><h3 className="section-title">{order.type==='LOCACAO'?'Boletos e encerramento da locação':'Boletos'}</h3>
   <Button variant="outline" disabled={busy} onClick={()=>void run()}>{view?'Atualizar cobranças':'Abrir cobranças'}</Button>
   {error&&<p role="alert" className="notice error">{error}</p>}
+  {notice&&<p className="notice">{notice}</p>}
   {view&&<>
    <p className="muted">{view.config?`Asaas: ${view.config.environment==='SANDBOX'?'Sandbox (testes, sem quitação real)':'Produção'}`:'Asaas não configurado nesta loja. Configure em Minhas lojas > Boletos (Asaas).'}</p>
    {!view.receivables.length&&view.config&&order.status==='COMPLETED'&&perms.has('ORDER_CREATE')&&<form className="form-grid" onSubmit={e=>{e.preventDefault();void run({action:'prepare',firstDueDate:first,adhesionDueDate:adhesion,fineBp:decimal(fine),interestBp:decimal(interest)});}}>
@@ -38,6 +42,14 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
     <p className="muted full">Revise os vencimentos antes de emitir. Parcelas mensais usam o dia inicial; em mês mais curto, o último dia. Eventuais centavos de arredondamento ficam na última parcela.</p>
     <Button disabled={busy||!active} type="submit">Preparar prévia dos boletos</Button>
    </form>}
+   {(()=>{const drafts=view.receivables.filter(r=>r.status==='DRAFT');const openOnes=view.receivables.filter(r=>r.url&&['OPEN','OVERDUE'].includes(r.status));const env=view.config?.environment==='SANDBOX'?'Sandbox (teste)':'Produção';
+    return (drafts.length>0||openOnes.length>0)&&<div className="notice" style={{marginBottom:0}}>
+     {drafts.length>0&&perms.has('ORDER_CREATE')&&<div><strong>{drafts.length} boleto(s) preparado(s) · total {money(drafts.reduce((a,r)=>a+r.amount,0))}.</strong> Confira os vencimentos e valores abaixo e emita todos de uma vez para entregar ao cliente no ato da compra.
+      <div className="form-actions" style={{justifyContent:'flex-start',marginTop:8}}><Button disabled={busy||!active} onClick={async()=>{if(!window.confirm(`Emitir ${drafts.length} boleto(s) no Asaas (${env}), total ${money(drafts.reduce((a,r)=>a+r.amount,0))}?`))return;const d=await run({action:'issueAll'});const res=d?.issueAll as {issued:number;total:number;error:string|null}|undefined;if(res){if(res.error)setError(`${res.issued} de ${res.total} boleto(s) emitido(s). Parou em: ${res.error}`);else setNotice(`${res.issued} boleto(s) emitido(s) no Asaas.`);}}}>{busy?<LoaderCircle size={16} className="animate-spin"/>:<Layers size={16}/>} Emitir todos os boletos ({drafts.length})</Button></div></div>}
+     {openOnes.length>0&&<div style={{marginTop:drafts.length?12:0}}><strong>{openOnes.length} boleto(s) emitido(s) em aberto.</strong> Junte todos num único PDF para enviar ao cliente; o arquivo também fica salvo em Documentos do pedido.
+      <div className="form-actions" style={{justifyContent:'flex-start',marginTop:8,alignItems:'center'}}><Button variant="outline" disabled={busy} onClick={async()=>{setMerged(null);const d=await run({action:'mergeBoletos'});const m=d?.merged as {documentId:string;count:number}|undefined;if(m){setMerged(m);setNotice(`PDF com ${m.count} boleto(s) salvo em Documentos do pedido.`);}}}>{busy?<LoaderCircle size={16} className="animate-spin"/>:<FileDown size={16}/>} Salvar todos em um PDF ({openOnes.length})</Button>
+       {merged&&<><a className="underline" href={`/api/documents/${merged.documentId}?download=1`}>Baixar PDF</a><a className="underline" href={`/api/documents/${merged.documentId}`} target="_blank" rel="noopener noreferrer">Abrir</a></>}</div></div>}
+    </div>;})()}
    {view.receivables.map(r=><div className="note" key={r.id}><strong>{kinds[r.kind]} {r.sequence} · {money(r.amount)}</strong><p>{r.dueDate.split('-').reverse().join('/')} · {labels[r.status]??r.status}{r.environment==='SANDBOX'?' · Teste':''}</p>
     {r.error&&<p className="notice error">{r.error}</p>}
     <div className="form-actions" style={{justifyContent:'flex-start'}}>
@@ -61,57 +73,72 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
  </section>;
 }
 
-type Overview={items:{id:string;orderId:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;url:string;environment:string;orderNumber:number;orderType:string;customerName:string;customerDocument:string;customerPhone:string;storeName:string;overdue:boolean;daysOverdue:number;hasAsaasCustomer:boolean}[];totals:{openAmount:number;overdueAmount:number;delinquentCustomers:number;paidAmount:number;needsReview:number}};
+type Totals={overdueAmount:number;overdueCount:number;delinquentCustomers:number;upcomingAmount:number;upcomingCount:number;openAmount:number;paidAmount:number;paidCount:number;allCount:number;needsReview:number};
+type Overview={items:{id:string;orderId:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;url:string;environment:string;orderNumber:number;orderType:string;customerName:string;customerDocument:string;customerPhone:string;storeName:string;overdue:boolean;daysOverdue:number;hasAsaasCustomer:boolean}[];totals:Totals};
 type Reminders={reminders:{event:string;enabled:boolean;channels:string[];scheduleOffset:number|null}[]};
 const reminderEvents:Record<string,string>={PAYMENT_CREATED:'Cobrança criada',PAYMENT_UPDATED:'Cobrança alterada',PAYMENT_DUEDATE_WARNING:'Aviso de vencimento',SEND_LINHA_DIGITAVEL:'Linha digitável no vencimento',PAYMENT_OVERDUE:'Cobrança vencida',PAYMENT_RECEIVED:'Pagamento recebido'};
-const filters:[string,string][]=[['overdue','Vencidos'],['open','Em aberto'],['paid','Pagos'],['all','Todos']];
+// Filtros com o significado escrito na tela (antes "Em aberto" incluía os vencidos, o que confundia).
+const FILTERS:{key:string;label:string;hint:string;count:(t:Totals)=>number;empty:string}[]=[
+ {key:'overdue',label:'Vencidos',hint:'Passaram do vencimento e ainda não foram pagos.',count:t=>t.overdueCount,empty:'Nenhum boleto vencido.'},
+ {key:'upcoming',label:'A vencer',hint:'Emitidos e dentro do prazo (vencimento de hoje em diante).',count:t=>t.upcomingCount,empty:'Nenhum boleto a vencer.'},
+ {key:'paid',label:'Pagos',hint:'Pagamento confirmado pelo Asaas.',count:t=>t.paidCount,empty:'Nenhum boleto pago ainda.'},
+ {key:'all',label:'Todos',hint:'Todos os boletos, inclusive preparados (ainda não emitidos) e cancelados.',count:t=>t.allCount,empty:'Nenhum boleto registrado.'},
+];
 const br=(d:string)=>d.split('-').reverse().join('/');
-/** Controle de boletos de todos os pedidos: inadimplentes, em aberto, pagos e lembretes do Asaas. */
+/** Aba "Boletos e inadimplência": boletos de todos os pedidos, inadimplentes e lembretes do Asaas. */
 export function BillingOverview({onOpenOrder}:{onOpenOrder:(orderId:string)=>void}) {
- const [open,setOpen]=useState(false),[filter,setFilter]=useState('overdue'),[data,setData]=useState<Overview|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [filter,setFilter]=useState('overdue'),[data,setData]=useState<Overview|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[loadedAt,setLoadedAt]=useState<number|null>(null);
  const [reminders,setReminders]=useState<Record<string,Reminders|string>>({});
  async function load(f=filter) {
   setBusy(true);setError('');
-  try{const r=await fetch(`/api/billing/receivables?filter=${f}`);const d=await r.json();if(!r.ok){setError(d.error||'Não foi possível consultar.');return;}setData(d);setFilter(f);}
+  try{const r=await fetch(`/api/billing/receivables?filter=${f}`,{cache:'no-store'});const d=await r.json();if(!r.ok){setError(d.error||'Não foi possível consultar.');return;}setData(d);setFilter(f);setLoadedAt(Date.now());}
   catch{setError('Falha de comunicação.');}finally{setBusy(false);}
  }
+ useEffect(()=>{void load('overdue')},[]); // eslint-disable-line react-hooks/exhaustive-deps
  async function loadReminders(id:string) {
   setReminders(p=>({...p,[id]:'Consultando o Asaas…'}));
   try{const r=await fetch(`/api/billing/receivables?reminders=${encodeURIComponent(id)}`);const d=await r.json();setReminders(p=>({...p,[id]:r.ok?d:(d.error||'Não foi possível consultar.')}));}
   catch{setReminders(p=>({...p,[id]:'Falha de comunicação.'}));}
  }
- return <section className="panel stack" style={{padding:16,marginBottom:16}}>
-  <div className="inline" style={{justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-   <h3 className="section-title" style={{margin:0}}>Boletos e inadimplência</h3>
-   <Button variant="outline" size="sm" disabled={busy} onClick={()=>{if(open&&data){setOpen(false);return;}setOpen(true);void load();}}>{open&&data?'Fechar':'Abrir controle de boletos'}</Button>
-  </div>
+ const t:Totals=data?.totals??{overdueAmount:0,overdueCount:0,delinquentCustomers:0,upcomingAmount:0,upcomingCount:0,openAmount:0,paidAmount:0,paidCount:0,allCount:0,needsReview:0};
+ const active=FILTERS.find(f=>f.key===filter)??FILTERS[0];
+ const card=(label:string,value:string,hint:string,tone='')=><section className="metric"><span>{label}</span><strong style={tone==='error'?{color:'#a52431'}:tone==='success'?{color:'#13734f'}:undefined}>{value}</strong><small>{hint}</small></section>;
+ return <>
   {error&&<p role="alert" className="notice error">{error}</p>}
-  {open&&data&&<>
-   <div className="order-summary">
-    <div><span className="muted">Vencido</span><strong>{money(data.totals.overdueAmount)}</strong></div>
-    <div><span className="muted">Clientes inadimplentes</span><strong>{data.totals.delinquentCustomers}</strong></div>
-    <div><span className="muted">Em aberto (inclui vencido)</span><strong>{money(data.totals.openAmount)}</strong></div>
-    <div><span className="muted">Recebido</span><strong>{money(data.totals.paidAmount)}</strong></div>
+  <div className="metrics">
+   {card('Vencido',money(t.overdueAmount),`${t.overdueCount} boleto(s) em atraso`,t.overdueAmount>0?'error':'')}
+   {card('Clientes inadimplentes',String(t.delinquentCustomers),'com ao menos 1 boleto vencido',t.delinquentCustomers>0?'error':'')}
+   {card('A vencer',money(t.upcomingAmount),`${t.upcomingCount} boleto(s) dentro do prazo`)}
+   {card('Recebido',money(t.paidAmount),`${t.paidCount} boleto(s) pagos`,t.paidAmount>0?'success':'')}
+  </div>
+  {t.needsReview>0&&<p className="notice">{t.needsReview} cobrança(s) com envio incerto ou divergente: abra o pedido e use &quot;Consultar no Asaas&quot;.</p>}
+  <section className="panel">
+   <div className="panel-heading" style={{flexWrap:'wrap'}}>
+    <div role="tablist" aria-label="Filtrar boletos" className="inline" style={{gap:6,flexWrap:'wrap'}}>
+     {FILTERS.map(f=><Button key={f.key} role="tab" aria-selected={filter===f.key} size="sm" variant={filter===f.key?'default':'outline'} disabled={busy} onClick={()=>void load(f.key)}>{f.label}<span className={'badge '+(filter===f.key?'':'neutral')} style={{marginLeft:6,padding:'2px 8px'}}>{f.count(t)}</span></Button>)}
+    </div>
+    <Button size="sm" variant="outline" disabled={busy} onClick={()=>void load()} title="Recarrega a lista com a situação mais recente já recebida do Asaas">{busy?<LoaderCircle size={14} className="animate-spin"/>:<RefreshCw size={14}/>} Atualizar lista</Button>
    </div>
-   {data.totals.needsReview>0&&<p className="notice">{data.totals.needsReview} cobrança(s) com envio incerto ou divergente: abra o pedido e use "Consultar no Asaas".</p>}
-   <div className="inline" style={{gap:6,flexWrap:'wrap'}}>{filters.map(([k,l])=><Button key={k} size="sm" variant={filter===k?'default':'outline'} disabled={busy} onClick={()=>void load(k)}>{l}</Button>)}<Button size="sm" variant="ghost" disabled={busy} onClick={()=>void load()}>Atualizar</Button></div>
-   <p className="muted">Situação conforme a última consulta ao Asaas (webhook ou conferência automática). Lembretes: o Asaas informa quais avisos estão ativos para o cliente e por quais canais, mas não informa pela API se cada aviso já foi entregue — o histórico de envios fica no painel do Asaas.</p>
-   {data.items.length?data.items.map(r=><div className="note" key={r.id}>
-    <div className="inline" style={{justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
-     <strong>{r.customerName} · {kinds[r.kind]??r.kind} {r.sequence} · {money(r.amount)}</strong>
-     <span className={'badge '+(r.overdue?'error':r.status==='PAID'?'success':'neutral')}>{r.overdue?`Vencido há ${r.daysOverdue} dia(s)`:labels[r.status]??r.status}</span>
-    </div>
-    <p className="muted">Pedido #{r.orderNumber} ({r.orderType==='VENDA'?'moto':'locação'}) · {r.storeName} · vence {br(r.dueDate)} · {r.customerDocument}{r.customerPhone?` · ${r.customerPhone}`:''}{r.environment==='SANDBOX'?' · Teste':''}</p>
-    <div className="form-actions" style={{justifyContent:'flex-start'}}>
-     <Button size="sm" variant="outline" onClick={()=>onOpenOrder(r.orderId)}>Abrir pedido</Button>
-     {r.hasAsaasCustomer&&<Button size="sm" variant="outline" onClick={()=>void loadReminders(r.id)}>Lembretes do Asaas</Button>}
-     {r.url&&<a href={r.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">Abrir boleto</a>}
-    </div>
-    {typeof reminders[r.id]==='string'&&<p className="muted">{reminders[r.id] as string}</p>}
-    {typeof reminders[r.id]==='object'&&<ul className="muted" style={{margin:'4px 0 0 16px'}}>{(reminders[r.id] as Reminders).reminders.length?(reminders[r.id] as Reminders).reminders.map(n=><li key={n.event+String(n.scheduleOffset)}>{reminderEvents[n.event]??n.event}{n.scheduleOffset!==null?` (${n.scheduleOffset} dia(s))`:''}: {n.enabled&&n.channels.length?`ativo — ${n.channels.join(', ')}`:'desativado'}</li>):<li>Nenhum lembrete configurado para este cliente no Asaas.</li>}</ul>}
-   </div>):<p className="muted">Nenhuma cobrança neste filtro.</p>}
-  </>}
- </section>;
+   <p className="muted" style={{padding:'12px 23px 0'}}><strong>{active.label}:</strong> {active.hint}{loadedAt?` Lista atualizada às ${new Date(loadedAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}.`:''} A situação de cada boleto chega do Asaas sozinha (aviso de pagamento e conferência automática).</p>
+   <div style={{padding:'8px 23px 20px'}}>
+    {data&&data.items.length?data.items.map(r=><div className="note" key={r.id}>
+     <div className="inline" style={{justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+      <strong>{r.customerName} · {kinds[r.kind]??r.kind} {r.sequence} · {money(r.amount)}</strong>
+      <span className={'badge '+(r.overdue?'error':r.status==='PAID'?'success':'neutral')}>{r.overdue?`Vencido há ${r.daysOverdue} dia(s)`:labels[r.status]??r.status}</span>
+     </div>
+     <p className="muted">Pedido #{r.orderNumber} ({r.orderType==='VENDA'?'moto':'locação'}) · {r.storeName} · vence {br(r.dueDate)} · {r.customerDocument}{r.customerPhone?` · ${r.customerPhone}`:''}{r.environment==='SANDBOX'?' · Teste':''}</p>
+     <div className="form-actions" style={{justifyContent:'flex-start',marginTop:8}}>
+      <Button size="sm" variant="outline" onClick={()=>onOpenOrder(r.orderId)}>Abrir pedido</Button>
+      {r.hasAsaasCustomer&&<Button size="sm" variant="outline" onClick={()=>void loadReminders(r.id)}>Lembretes do Asaas</Button>}
+      {r.url&&<a className="underline" href={r.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">Abrir boleto</a>}
+     </div>
+     {typeof reminders[r.id]==='string'&&<p className="muted">{reminders[r.id] as string}</p>}
+     {typeof reminders[r.id]==='object'&&<ul className="muted" style={{margin:'4px 0 0 16px'}}>{(reminders[r.id] as Reminders).reminders.length?(reminders[r.id] as Reminders).reminders.map(n=><li key={n.event+String(n.scheduleOffset)}>{reminderEvents[n.event]??n.event}{n.scheduleOffset!==null?` (${n.scheduleOffset} dia(s))`:''}: {n.enabled&&n.channels.length?`ativo — ${n.channels.join(', ')}`:'desativado'}</li>):<li>Nenhum lembrete configurado para este cliente no Asaas.</li>}</ul>}
+    </div>):<p className="muted">{busy&&!data?'Carregando…':active.empty}</p>}
+    <p className="muted" style={{marginTop:12}}>Lembretes: o Asaas informa quais avisos estão ativos para o cliente e por quais canais, mas não informa pela API se cada aviso já foi entregue — o histórico de envios fica no painel do Asaas.</p>
+   </div>
+  </section>
+ </>;
 }
 
 type BillingSummary={configured:boolean;environment:string;notificationsEnabled:boolean;webhookPath:string|null;updatedAt:number|null;environmentLocked:boolean};

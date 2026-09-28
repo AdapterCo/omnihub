@@ -2,7 +2,8 @@ import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
 import { RuleError, requireActive } from '@/lib/domain';
-import { billingView, saveBillingConfig, prepareSchedule, issueReceivable, syncReceivable, closeRental } from '@/lib/billing/service';
+import { billingView, saveBillingConfig, prepareSchedule, issueReceivable, issueAllReceivables, mergeOrderBoletos, syncReceivable, closeRental } from '@/lib/billing/service';
+import { storageFromEnv } from '@/lib/storage';
 import { logger } from '@/lib/log';
 import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 export const dynamic='force-dynamic';
@@ -25,6 +26,12 @@ async function handle(request:Request,context:{params:Promise<{id:string}>},muta
    if(!view.receivables.some(r=>r.id===body.receivableId))throw new RuleError('Cobrança não encontrada neste pedido.',404);
    if(body.action==='issue')await issueReceivable(db,tenantId,body.receivableId,actor);
    else await syncReceivable(db,tenantId,body.receivableId);
+  }else if(body.action==='issueAll'){
+   const result=await issueAllReceivables(db,tenantId,id,actor);
+   return reply({...(await billingView(db,tenantId,id,actor)),issueAll:result});
+  }else if(body.action==='mergeBoletos'){
+   const result=await mergeOrderBoletos(db,storageFromEnv(),tenantId,id,actor);
+   return reply({...(await billingView(db,tenantId,id,actor)),merged:result});
   }else if(body.action==='closeRental')await closeRental(db,tenantId,id,body,actor);
   else throw new RuleError('Ação inválida.',400);
   return reply(await billingView(db,tenantId,id,actor));

@@ -6,6 +6,9 @@ import { encryptPayload, decryptPayload } from '../fiscal/certificate.ts';
 import { recordAudit } from '../audit/service.ts';
 import { dayKey } from '../time.ts';
 import { AsaasClient, AsaasError, type AsaasPayment, type BillingFetch } from './asaas.ts';
+import { PDFDocument } from 'pdf-lib';
+import { storeDocument } from '../documents/service.ts';
+import type { ObjectStorage } from '../storage/index.ts';
 
 type Config = {store_id: string; tenant_id: string; environment: string; api_key_enc: string; webhook_secret_enc: string; webhook_key: string; notifications_enabled: number};
 type Order = {id: string; number: number; store_id: string; customer_id: string; type: string; status: string; total: number; down_payment: number; installments: number; first_due_date: string; monthly_amount: number; adhesion_amount: number; adhesion_billing: string; due_day: number; unit_id: string; product_id: string};
@@ -147,7 +150,10 @@ export async function issueReceivable(db:D1Database,tenant:string,id:string,acto
   await applyPayment(db,r,p,now);
   await audit(db,tenant,o,actor,'billing.issue','Boleto emitido e vinculado ao pedido',now);
  }catch(error){
-  const uncertain=paymentStarted || (error instanceof AsaasError && error.uncertain);
+  // Recusa explícita do Asaas (4xx com motivo) = nada foi criado lá: volta a Preparado para corrigir e
+  // reenviar. Incerto só quando a comunicação falhou/resposta estranha (AsaasError.uncertain) ou
+  // quando a falha veio depois de o Asaas aceitar a cobrança (ex.: divergência na conferência).
+  const uncertain=error instanceof AsaasError?error.uncertain:paymentStarted;
   await db.prepare("UPDATE order_receivables SET status=?,last_error=?,updated_at=? WHERE id=? AND status='CREATING'").bind(uncertain?'UNCERTAIN':'DRAFT',error instanceof RuleError?error.message:'Falha ao emitir boleto; consulte o provedor.',now,id).run();throw error;
  }
 }
@@ -243,20 +249,24 @@ export async function closeRental(db:D1Database,tenant:string,id:string,input:{t
  * Controle dos boletos de todos os pedidos (inadimplência). Vencido = status OVERDUE no Asaas ou
  * em aberto com vencimento anterior a hoje (o Asaas pode atualizar o status com atraso).
  */
-export type ReceivableFilter='overdue'|'open'|'paid'|'all';
+// overdue = vencidos; upcoming = a vencer (em aberto, vencimento de hoje em diante); open = os dois;
+// paid = pagos; all = todos, inclusive preparados e cancelados.
+export type ReceivableFilter='overdue'|'upcoming'|'open'|'paid'|'all';
 export async function listReceivablesOverview(db:D1Database,tenant:string,actor:Actor,filter:ReceivableFilter,now=Date.now()) {
  requirePermission(actor.permissions,'ORDER_VIEW');
- if(!['overdue','open','paid','all'].includes(filter))throw new RuleError('Filtro inválido.',400);
+ if(!['overdue','upcoming','open','paid','all'].includes(filter))throw new RuleError('Filtro inválido.',400);
  const today=dayKey(now);
  const scoped=actor.role!=='admin'&&actor.storeId?actor.storeId:null;
- const where=filter==='overdue'?"AND (r.status='OVERDUE' OR (r.status='OPEN' AND r.due_date<?))":filter==='open'?"AND r.status IN ('OPEN','OVERDUE')":filter==='paid'?"AND r.status='PAID'":'';
- const binds:unknown[]=[tenant];if(scoped)binds.push(scoped);if(filter==='overdue')binds.push(today);
+ const where=filter==='overdue'?"AND (r.status='OVERDUE' OR (r.status='OPEN' AND r.due_date<?))":filter==='upcoming'?"AND r.status='OPEN' AND r.due_date>=?":filter==='open'?"AND r.status IN ('OPEN','OVERDUE')":filter==='paid'?"AND r.status='PAID'":'';
+ const binds:unknown[]=[tenant];if(scoped)binds.push(scoped);if(filter==='overdue'||filter==='upcoming')binds.push(today);
  const rows=await db.prepare(`SELECT r.id,r.order_id AS orderId,r.kind,r.sequence,r.amount,r.due_date AS dueDate,r.status,r.provider_status AS providerStatus,r.invoice_url AS url,r.environment,r.provider_customer_id AS providerCustomerId,o.number AS orderNumber,o.type AS orderType,c.name AS customerName,c.document AS customerDocument,c.phone AS customerPhone,s.name AS storeName FROM order_receivables r JOIN orders o ON o.id=r.order_id JOIN customers c ON c.id=r.customer_id JOIN stores s ON s.id=r.store_id WHERE r.tenant_id=? ${scoped?'AND r.store_id=?':''} ${where} ORDER BY r.due_date,o.number,r.kind,r.sequence LIMIT 500`).bind(...binds).all<{id:string;orderId:string;kind:string;sequence:number;amount:number;dueDate:string;status:string;providerStatus:string;url:string;environment:string;providerCustomerId:string|null;orderNumber:number;orderType:string;customerName:string;customerDocument:string;customerPhone:string;storeName:string}>();
  const noon=(d:string)=>Date.parse(d+'T12:00:00Z');
  const items=(rows.results??[]).map(({providerCustomerId,...r})=>{const overdue=r.status==='OVERDUE'||(r.status==='OPEN'&&r.dueDate<today);return {...r,sequence:Number(r.sequence),amount:Number(r.amount),orderNumber:Number(r.orderNumber),overdue,daysOverdue:overdue?Math.max(0,Math.round((noon(today)-noon(r.dueDate))/86_400_000)):0,hasAsaasCustomer:!!providerCustomerId};});
  // Totais sobre todas as cobranças visíveis ao usuário, independentemente do filtro.
- const t=await db.prepare(`SELECT SUM(CASE WHEN status IN ('OPEN','OVERDUE') THEN amount ELSE 0 END) AS openAmount,SUM(CASE WHEN status='OVERDUE' OR (status='OPEN' AND due_date<?) THEN amount ELSE 0 END) AS overdueAmount,COUNT(DISTINCT CASE WHEN status='OVERDUE' OR (status='OPEN' AND due_date<?) THEN customer_id END) AS delinquentCustomers,SUM(CASE WHEN status='PAID' THEN amount ELSE 0 END) AS paidAmount,SUM(CASE WHEN status IN ('UNCERTAIN','REVIEW','CREATING') THEN 1 ELSE 0 END) AS needsReview FROM order_receivables WHERE tenant_id=? ${scoped?'AND store_id=?':''}`).bind(today,today,tenant,...(scoped?[scoped]:[])).first<Record<string,number|null>>();
- return {items,totals:{openAmount:Number(t?.openAmount??0),overdueAmount:Number(t?.overdueAmount??0),delinquentCustomers:Number(t?.delinquentCustomers??0),paidAmount:Number(t?.paidAmount??0),needsReview:Number(t?.needsReview??0)}};
+ const t=await db.prepare(`SELECT COALESCE(SUM(CASE WHEN status='OVERDUE' OR (status='OPEN' AND due_date<?) THEN amount ELSE 0 END),0) AS overdueAmount,COUNT(CASE WHEN status='OVERDUE' OR (status='OPEN' AND due_date<?) THEN 1 END) AS overdueCount,COUNT(DISTINCT CASE WHEN status='OVERDUE' OR (status='OPEN' AND due_date<?) THEN customer_id END) AS delinquentCustomers,COALESCE(SUM(CASE WHEN status='OPEN' AND due_date>=? THEN amount ELSE 0 END),0) AS upcomingAmount,COUNT(CASE WHEN status='OPEN' AND due_date>=? THEN 1 END) AS upcomingCount,COALESCE(SUM(CASE WHEN status IN ('OPEN','OVERDUE') THEN amount ELSE 0 END),0) AS openAmount,COALESCE(SUM(CASE WHEN status='PAID' THEN amount ELSE 0 END),0) AS paidAmount,COUNT(CASE WHEN status='PAID' THEN 1 END) AS paidCount,COUNT(*) AS allCount,COUNT(CASE WHEN status IN ('UNCERTAIN','REVIEW','CREATING') THEN 1 END) AS needsReview FROM order_receivables WHERE tenant_id=? ${scoped?'AND store_id=?':''}`).bind(today,today,today,today,today,tenant,...(scoped?[scoped]:[])).first<Record<string,number|string|null>>();
+ // Sempre número (0 quando não há cobrança): somas/contagens podem voltar nulas ou como texto.
+ const n=(v:unknown)=>{const x=Number(v??0);return Number.isFinite(x)?x:0;};
+ return {items,totals:{overdueAmount:n(t?.overdueAmount),overdueCount:n(t?.overdueCount),delinquentCustomers:n(t?.delinquentCustomers),upcomingAmount:n(t?.upcomingAmount),upcomingCount:n(t?.upcomingCount),openAmount:n(t?.openAmount),paidAmount:n(t?.paidAmount),paidCount:n(t?.paidCount),allCount:n(t?.allCount),needsReview:n(t?.needsReview)}};
 }
 
 type AsaasNotification={event?:string;enabled?:boolean;emailEnabledForCustomer?:boolean;smsEnabledForCustomer?:boolean;whatsappEnabledForCustomer?:boolean;phoneCallEnabledForCustomer?:boolean;scheduleOffset?:number};
@@ -274,4 +284,55 @@ export async function customerReminders(db:D1Database,tenant:string,receivableId
  if(!Array.isArray(res.data))throw new RuleError('Resposta inválida do Asaas ao consultar os lembretes.',502);
  const channels=(n:AsaasNotification)=>[n.emailEnabledForCustomer&&'E-mail',n.smsEnabledForCustomer&&'SMS',n.whatsappEnabledForCustomer&&'WhatsApp',n.phoneCallEnabledForCustomer&&'Robô de voz'].filter((x):x is string=>!!x);
  return {reminders:res.data.filter(n=>typeof n.event==='string').map(n=>({event:n.event as string,enabled:n.enabled===true,channels:channels(n),scheduleOffset:typeof n.scheduleOffset==='number'?n.scheduleOffset:null}))};
+}
+
+/**
+ * Emite de uma vez todos os boletos em rascunho do pedido (a loja entrega o carnê no ato da compra).
+ * Em sequência, na ordem de vencimento, reaproveitando o mesmo cliente no Asaas. Para no primeiro
+ * erro e informa quantos saíram — os já emitidos continuam válidos e "Emitir todos" retoma dali.
+ */
+export async function issueAllReceivables(db:D1Database,tenant:string,orderId:string,actor:Actor,fetcher?:BillingFetch,now=Date.now()):Promise<{issued:number;total:number;error:string|null}> {
+ await orderScope(db,tenant,orderId,actor,'ORDER_CREATE');
+ const rows=(await db.prepare("SELECT id FROM order_receivables WHERE tenant_id=? AND order_id=? AND status='DRAFT' ORDER BY due_date,kind,sequence").bind(tenant,orderId).all<{id:string}>()).results??[];
+ if(!rows.length)throw new RuleError('Não há boletos preparados para emitir neste pedido.',409);
+ let issued=0;
+ for(const r of rows){
+  try{await issueReceivable(db,tenant,r.id,actor,fetcher,now);issued++;}
+  catch(error){return {issued,total:rows.length,error:error instanceof RuleError?error.message:'Falha ao emitir; consulte a cobrança no Asaas antes de repetir.'};}
+ }
+ return {issued,total:rows.length,error:null};
+}
+
+const BOLETO_PDF_MAX=5*1024*1024;
+function isAsaasHttps(raw:string):boolean{try{const u=new URL(raw);return u.protocol==='https:'&&(u.hostname==='asaas.com'||u.hostname.endsWith('.asaas.com'));}catch{return false;}}
+/**
+ * Junta os PDFs dos boletos em aberto do pedido num único arquivo (carnê), salvo em Documentos do
+ * pedido e baixável para enviar ao cliente. Só baixa de endereços https do próprio Asaas (o link
+ * vem do Asaas e já foi validado na conciliação) e confere que cada arquivo é PDF. Gerar de novo
+ * substitui o carnê anterior (exclusão lógica).
+ */
+export async function mergeOrderBoletos(db:D1Database,storage:ObjectStorage,tenant:string,orderId:string,actor:Actor,fetcher:BillingFetch=fetch,now=Date.now()):Promise<{documentId:string;count:number}> {
+ const o=await orderScope(db,tenant,orderId,actor);
+ const rows=(await db.prepare("SELECT kind,sequence,invoice_url AS url FROM order_receivables WHERE tenant_id=? AND order_id=? AND status IN ('OPEN','OVERDUE') AND invoice_url<>'' ORDER BY due_date,kind,sequence").bind(tenant,orderId).all<{kind:string;sequence:number;url:string}>()).results??[];
+ if(!rows.length)throw new RuleError('Nenhum boleto emitido e em aberto neste pedido para juntar.',409);
+ const out=await PDFDocument.create();
+ for(const r of rows){
+  const label=`${KIND_LABEL[r.kind]??r.kind} ${r.sequence}`;
+  if(!isAsaasHttps(r.url))throw new RuleError(`Link do boleto (${label}) não é do Asaas. Consulte a cobrança antes.`,409);
+  let res:Response;
+  try{res=await fetcher(r.url,{signal:AbortSignal.timeout(30_000),redirect:'follow'});}catch{throw new RuleError(`Não foi possível baixar o boleto (${label}) do Asaas. Tente de novo.`,503);}
+  if(res.url&&!isAsaasHttps(res.url))throw new RuleError(`O Asaas redirecionou o boleto (${label}) para fora do domínio dele. Nada foi salvo.`,502);
+  if(!res.ok)throw new RuleError(`O Asaas não entregou o PDF do boleto (${label}) (HTTP ${res.status}).`,502);
+  if(Number(res.headers.get('content-length')??0)>BOLETO_PDF_MAX)throw new RuleError(`PDF do boleto (${label}) grande demais.`,502);
+  const bytes=new Uint8Array(await res.arrayBuffer());
+  if(bytes.length>BOLETO_PDF_MAX||!(bytes[0]===0x25&&bytes[1]===0x50&&bytes[2]===0x44&&bytes[3]===0x46))throw new RuleError(`O Asaas não devolveu um PDF para o boleto (${label}).`,502);
+  const src=await PDFDocument.load(bytes,{ignoreEncryption:true});
+  for(const page of await out.copyPages(src,src.getPageIndices()))out.addPage(page);
+ }
+ out.setTitle(`Boletos do pedido #${o.number}`);
+ const pdf=await out.save();
+ await db.prepare("UPDATE documents SET deleted_at=?, deleted_by=? WHERE tenant_id=? AND order_id=? AND type='BOLETOS' AND deleted_at IS NULL").bind(now,actor.userId,tenant,orderId).run();
+ const doc=await storeDocument(db,storage,tenant,{storeId:o.store_id,customerId:o.customer_id,orderId,type:'BOLETOS',description:`Boletos do pedido #${o.number} (${rows.length} em aberto, arquivo único)`,originalFilename:`boletos-pedido-${o.number}.pdf`,bytes:pdf,source:'system'},actor,now);
+ await audit(db,tenant,o,actor,'billing.boletos.pdf',`PDF único com ${rows.length} boleto(s) salvo em Documentos`,now);
+ return {documentId:doc.id,count:rows.length};
 }

@@ -1,11 +1,11 @@
 'use client';
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus, FileSignature, Paperclip, Eye, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
 import { money, date, type Snapshot, type OrderView, type UnitView, type StoreRecord, type ContractView, type DocumentView } from '@/lib/domain';
-import { OrderBilling, BillingOverview } from './order-billing';
+import { OrderBilling } from './order-billing';
 
 // Aba Pedidos (venda com contrato de moto e locação) e painel de unidades com chassi/IMEI.
 // Toda regra fica no backend (lib/orders/service.ts); a tela só coleta e mostra os dados.
@@ -36,7 +36,7 @@ const CONTRACT_STATUS: Record<string, { label: string; tone: string }> = {
 };
 // Status que ainda permitem gerar uma revisão nova do contrato (nada pendente no Adapter Sign).
 const REGENERABLE = ['GENERATED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
-const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign' };
+const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign', BOLETOS: 'Boletos (arquivo único)' };
 const ACCEPT = 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png';
 
 const toCents = (v: string | undefined) => {
@@ -57,12 +57,14 @@ function NativePick({ value, onChange, options, placeholder }: { value: string; 
  </select>;
 }
 
-export function OrdersPage({ data, act, stores, storeFilter, busy, active, refresh }: { data: Snapshot; act: Act; stores: StoreRecord[]; storeFilter: string; busy: boolean; active: boolean; refresh: () => Promise<unknown> }) {
+export function OrdersPage({ data, act, stores, storeFilter, busy, active, refresh, focusOrderId, onFocused }: { data: Snapshot; act: Act; stores: StoreRecord[]; storeFilter: string; busy: boolean; active: boolean; refresh: () => Promise<unknown>; focusOrderId?: string | null; onFocused?: () => void }) {
  const perms = new Set((data.actor.permissions as unknown as string[]) ?? []);
  const orders = (data.state.orders ?? []).filter((o) => storeFilter === 'all' || o.storeId === storeFilter);
  const [search, setSearch] = useState('');
  const [editing, setEditing] = useState<OrderView | 'new' | null>(null);
  const [viewing, setViewing] = useState<string | null>(null);
+ // Aberto a partir da aba Boletos e inadimplência ("Abrir pedido").
+ useEffect(() => { if (focusOrderId) { setEditing(null); setViewing(focusOrderId); onFocused?.(); } }, [focusOrderId]); // eslint-disable-line react-hooks/exhaustive-deps
  const current = viewing ? (data.state.orders ?? []).find((o) => o.id === viewing) ?? null : null;
  const q = search.trim().toLowerCase();
  const list = q ? orders.filter((o) => [String(o.number), o.customerName, o.serial, o.productName, o.sellerName].some((x) => x.toLowerCase().includes(q))) : orders;
@@ -72,7 +74,6 @@ export function OrdersPage({ data, act, stores, storeFilter, busy, active, refre
    <input className="search-input" placeholder="Buscar por número, cliente, chassi/IMEI ou vendedor" value={search} onChange={(e) => setSearch(e.target.value)} />
    {perms.has('ORDER_CREATE') && <Button disabled={!active || busy || !orderStores.length} onClick={() => setEditing('new')}><Plus /> Novo pedido</Button>}
   </div>
-  {perms.has('ORDER_VIEW') && orderStores.length > 0 && <BillingOverview onOpenOrder={(id) => { setEditing(null); setViewing(id); }} />}
   {!orderStores.length && <div className="notice">Nenhuma loja tem as modalidades Venda com contrato ou Locação. Habilite em Minhas lojas &gt; Editar.</div>}
   <section className="panel">
    {list.length ? <div className="table-pad"><Table><TableHeader><TableRow>{['Pedido', 'Cliente', 'Produto / unidade', 'Condições', 'Status', 'Ação'].map((h) => <TableHead key={h}>{h}</TableHead>)}</TableRow></TableHeader>

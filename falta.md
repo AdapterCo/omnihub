@@ -337,6 +337,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **CSP com nonce (melhoria 4 da varredura, 2026-09-27)** | **Concluído** | Páginas com nonce por requisição (`proxy.ts`), sem `unsafe-inline` em script; rotas de API sem nenhum script permitido. |
 | **Limpeza de registros de controle (melhoria 5 da varredura, 2026-09-27)** | **Concluído** | Eventos de webhook resolvidos apagados após 90 dias; desafios de login e links de senha vencidos apagados; worker a cada 6 h. As 5 melhorias da varredura concluídas. |
 | **Configuração do Asaas no card da loja (2026-09-27)** | **Concluído** | Minhas lojas > Boletos (Asaas) com passo a passo, gerar/copiar token, URL do webhook e roteiro de uso; a configuração saiu de dentro do pedido. |
+| **Asaas no Sandbox real + aba Boletos e inadimplência + emitir todos + PDF único (2026-09-27/28)** | **Concluído (webhook a validar na VPS)** | Motivo da recusa do Asaas na tela; externalReference ≤ 100; recusa 4xx volta a Preparado; aba Boletos e inadimplência com filtros claros e contagens; emitir todos; PDF único salvo em Documentos. Validado no Sandbox real (12 boletos + PDF de 12 páginas). |
 
 ---
 
@@ -352,6 +353,6 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
    ```bash
    node --test tests/*.test.ts
    ```
-   *Resultado esperado:* **283 testes passando** (0 falhas).
+   *Resultado esperado:* **289 testes passando** (0 falhas).
 
 3. **Antes de qualquer emissão, cancelamento ou inutilização real de NF-e/NFC-e:** confirmar a estrutura dos envelopes SOAP (`enviNFe`/`NFeAutorizacao4`, `envEvento`/`NFeRecepcaoEvento4` e `inutNFe`/`NFeInutilizacao4`), o mapeamento de `cStat` contra o MOC 7.00 Anexos I, II e V, e a fórmula do hash do QR Code da NFC-e contra a NT 2015.002 vigente, com um certificado A1 de teste de verdade e um CSC real num ambiente com a cadeia ICP-Brasil confiável (este ambiente de desenvolvimento não tem essa cadeia disponível).

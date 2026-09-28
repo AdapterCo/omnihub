@@ -9,7 +9,7 @@ import type { ObjectStorage } from '../storage/index.ts';
 // não pela extensão nem pelo MIME informado pelo navegador — um executável renomeado para .pdf
 // é recusado. Exclusão é sempre lógica.
 
-export const DOCUMENT_TYPES = ['ANEXO', 'CONTRATO_ORIGINAL', 'CONTRATO_ASSINADO', 'EVIDENCIA_ASSINATURA'] as const;
+export const DOCUMENT_TYPES = ['ANEXO', 'CONTRATO_ORIGINAL', 'CONTRATO_ASSINADO', 'EVIDENCIA_ASSINATURA', 'BOLETOS'] as const;
 export type DocumentType = typeof DOCUMENT_TYPES[number];
 export type DocumentSource = 'manual' | 'system' | 'adapter_sign';
 

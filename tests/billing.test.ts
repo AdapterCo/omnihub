@@ -7,7 +7,7 @@ import {createStore,createProduct} from '../lib/catalog/service.ts';
 import {createCustomer} from '../lib/customers/service.ts';
 import {registerUnit,createOrder,completeOrder} from '../lib/orders/service.ts';
 import {openSession} from '../lib/cash/service.ts';
-import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders,getBillingConfigSummary,asaasPhone} from '../lib/billing/service.ts';
+import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders,getBillingConfigSummary,asaasPhone,issueAllReceivables,mergeOrderBoletos} from '../lib/billing/service.ts';
 import type {Actor} from '../lib/domain.ts';
 import type {AsaasPayment,BillingFetch} from '../lib/billing/asaas.ts';
 import {AsaasClient} from '../lib/billing/asaas.ts';
@@ -187,4 +187,49 @@ test('Asaas: referências externas cabem no limite de 100 caracteres e descriç�
  assert.ok(String(customer.externalReference).length<=100&&String(payment.externalReference).length<=100);
  assert.equal(customer.cpfCnpj,'52998224725');
  assert.match(String(payment.description),/^Pedido #\d+ - Parcela 1$/);
+});
+
+test('emitir todos: emite os preparados em sequência; se um falha, para e informa quantos saíram',async()=>{
+ const f=await fixture();await prepareSchedule(f.db,f.tenant,f.id,{fineBp:200,interestBp:100},f.actor,now);
+ // MOCK: a 3ª cobrança é recusada pelo "Asaas" (erro documentado 400).
+ let payments=0;
+ const flaky:BillingFetch=async(url,init)=>{const u=new URL(String(url));if(u.pathname.endsWith('/payments')&&init?.method==='POST'&&++payments===3)return new Response(JSON.stringify({errors:[{code:'invalid_value',description:'Valor inválido.'}]}),{status:400});return f.mock.fetcher(url,init);};
+ const partial=await issueAllReceivables(f.db,f.tenant,f.id,f.actor,flaky,now);
+ assert.equal(partial.issued,2);assert.equal(partial.total,3);assert.match(String(partial.error),/Valor inválido/);
+ const rest=await issueAllReceivables(f.db,f.tenant,f.id,f.actor,f.mock.fetcher,now);
+ assert.deepEqual(rest,{issued:1,total:1,error:null});
+ assert.ok((await billingView(f.db,f.tenant,f.id,f.actor)).receivables.every(r=>r.status==='OPEN'));
+ await assert.rejects(()=>issueAllReceivables(f.db,f.tenant,f.id,f.actor,f.mock.fetcher,now),/Não há boletos preparados/);
+});
+test('PDF único: junta os boletos em aberto num arquivo salvo em Documentos; só baixa de https do Asaas',async()=>{
+ const {PDFDocument}=await import('pdf-lib');
+ const {createLocalStorage}=await import('../lib/storage/index.ts');
+ const {mkdtemp}=await import('node:fs/promises');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+ const storage=createLocalStorage(await mkdtemp(join(tmpdir(),'omnihub-boletos-')));
+ const f=await fixture();await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
+ await issueAllReceivables(f.db,f.tenant,f.id,f.actor,f.mock.fetcher,now);
+ // MOCK do PDF de cada boleto (uma página por boleto).
+ const onePage=async()=>{const d=await PDFDocument.create();d.addPage();return d.save();};
+ const pdfFetch:BillingFetch=async()=>new Response(Buffer.from(await onePage()),{status:200,headers:{'content-type':'application/pdf'}});
+ const res=await mergeOrderBoletos(f.db,storage,f.tenant,f.id,f.actor,pdfFetch,now);
+ assert.equal(res.count,3);
+ const doc=await f.db.prepare('SELECT type,storage_key AS k,mime_type AS m FROM documents WHERE id=?').bind(res.documentId).first<{type:string;k:string;m:string}>();
+ assert.equal(doc!.type,'BOLETOS');assert.equal(doc!.m,'application/pdf');
+ const merged=await PDFDocument.load(await storage.get(doc!.k));assert.equal(merged.getPageCount(),3);
+ // Gerar de novo substitui o anterior (exclusão lógica).
+ const again=await mergeOrderBoletos(f.db,storage,f.tenant,f.id,f.actor,pdfFetch,now);
+ const live=await f.db.prepare("SELECT id FROM documents WHERE order_id=? AND type='BOLETOS' AND deleted_at IS NULL").bind(f.id).all<{id:string}>();
+ assert.deepEqual(live.results.map(r=>r.id),[again.documentId]);
+ // Resposta que não é PDF é recusada; link fora do Asaas nunca é baixado.
+ await assert.rejects(()=>mergeOrderBoletos(f.db,storage,f.tenant,f.id,f.actor,async()=>new Response('<html>',{status:200}),now),/não devolveu um PDF/);
+ await f.db.prepare("UPDATE order_receivables SET invoice_url='https://exemplo.test/b.pdf' WHERE order_id=?").bind(f.id).run();
+ await assert.rejects(()=>mergeOrderBoletos(f.db,storage,f.tenant,f.id,f.actor,pdfFetch,now),/não é do Asaas/);
+});
+test('painel: contagens por filtro, A vencer separado de Vencido e Recebido zerado quando não há pagamento',async()=>{
+ const f=await fixture();await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
+ await issueAllReceivables(f.db,f.tenant,f.id,f.actor,f.mock.fetcher,now);
+ const o=await listReceivablesOverview(f.db,f.tenant,f.actor,'upcoming',now);
+ assert.equal(o.items.length,3);
+ assert.deepEqual({paid:o.totals.paidAmount,paidCount:o.totals.paidCount,overdue:o.totals.overdueCount,upcoming:o.totals.upcomingCount,all:o.totals.allCount},{paid:0,paidCount:0,overdue:0,upcoming:3,all:3});
+ assert.equal(o.totals.upcomingAmount,10001);
 });
