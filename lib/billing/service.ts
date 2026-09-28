@@ -88,6 +88,15 @@ export async function prepareSchedule(db: D1Database, tenant: string, id: string
  await audit(db,tenant,o,actor,'billing.prepare','Cronograma de boletos preparado para revisão',now);
 }
 async function loadReceivable(db:D1Database,tenant:string,id:string) {const r=await db.prepare('SELECT * FROM order_receivables WHERE id = ? AND tenant_id = ?').bind(id,tenant).first<Receivable>();if(!r)throw new RuleError('Cobrança não encontrada.',404);return r;}
+// Telefone no formato do Asaas (DDD + número, só dígitos): celular (11 dígitos, começa com 9 após o
+// DDD) vai em mobilePhone; fixo (10 dígitos) em phone; qualquer outro formato não é enviado (o
+// telefone é opcional no Asaas e um valor fora do padrão recusaria o cadastro inteiro).
+export function asaasPhone(raw:string):{mobilePhone?:string;phone?:string}{
+ const d=String(raw??'').replace(/\D/g,'').replace(/^0+/,'').replace(/^55(?=\d{10,11}$)/,'');
+ if(/^\d{2}9\d{8}$/.test(d))return {mobilePhone:d};
+ if(/^\d{2}[2-5]\d{7}$/.test(d))return {phone:d};
+ return {};
+}
 function client(c:Config,fetcher?:BillingFetch){return new AsaasClient(dec(c.api_key_enc),c.environment,fetcher);}
 async function applyPayment(db:D1Database,r:Receivable,p:AsaasPayment,now:number) {
  const amount=Math.round(Number(p.originalValue??p.value)*100);
@@ -125,11 +134,11 @@ export async function issueReceivable(db:D1Database,tenant:string,id:string,acto
   const customers=await api.call<{data:{id:string;cpfCnpj:string}[];hasMore:boolean}>('GET','/customers?limit=100&externalReference='+encodeURIComponent(ref));
   if(!Array.isArray(customers.data)||customers.data.length>1||customers.hasMore)throw new RuleError('Cadastro duplicado no Asaas; confira o cliente.',409);
   let cust=customers.data[0];
-  if(!cust)cust=await api.call('POST','/customers',{name:customer.name,cpfCnpj:customer.document,email:customer.email||undefined,mobilePhone:customer.phone.replace(/\D/g,'')||undefined,externalReference:ref,notificationDisabled:!c.notifications_enabled});
+  if(!cust)cust=await api.call('POST','/customers',{name:customer.name,cpfCnpj:customer.document.replace(/\D/g,''),email:customer.email||undefined,...asaasPhone(customer.phone),externalReference:ref,notificationDisabled:!c.notifications_enabled});
   if(!cust?.id || cust.cpfCnpj.replace(/\D/g,'')!==customer.document.replace(/\D/g,''))throw new RuleError('Cliente retornado pelo Asaas diverge do cadastro.',409);
   await db.prepare('UPDATE order_receivables SET provider_customer_id=? WHERE id=?').bind(cust.id,id).run();r.provider_customer_id=cust.id;
   paymentStarted=true;
-  const p=await api.createPayment({customer:cust.id,billingType:'BOLETO',value:Number(r.amount)/100,dueDate:r.due_date,externalReference:r.external_ref,description:`Pedido ${o.id} - ${r.kind} ${r.sequence}`,fine:{value:Number(r.fine_bp)/100,type:'PERCENTAGE'},interest:{value:Number(r.interest_bp)/100}});
+  const p=await api.createPayment({customer:cust.id,billingType:'BOLETO',value:Number(r.amount)/100,dueDate:r.due_date,externalReference:r.external_ref,description:`Pedido ${o.id} - ${r.kind} ${r.sequence}`,...(Number(r.fine_bp)>0?{fine:{value:Number(r.fine_bp)/100,type:'PERCENTAGE'}}:{}),...(Number(r.interest_bp)>0?{interest:{value:Number(r.interest_bp)/100}}:{})});
   await applyPayment(db,r,p,now);
   await audit(db,tenant,o,actor,'billing.issue','Boleto emitido e vinculado ao pedido',now);
  }catch(error){

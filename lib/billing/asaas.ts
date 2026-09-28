@@ -22,8 +22,14 @@ export class AsaasClient {
   catch { throw new AsaasError('Comunicação incerta com o Asaas. Consulte a cobrança antes de qualquer novo envio.', true); }
   const parsed = await response.json().catch(() => null);
   if (!response.ok) {
-   // Não ecoar o payload/segredo nem dados pessoais de erros remotos.
-   throw new AsaasError(`Asaas recusou a operação (HTTP ${response.status}). Confira os dados e a configuração da conta.`, response.status >= 500 || response.status === 429);
+   // Erro documentado: { errors: [{ code, description }] }. A descrição é a validação do Asaas
+   // (ex.: "O CPF/CNPJ informado é inválido.") e é mostrada ao usuário, limitada e sem caracteres
+   // de controle; nunca ecoamos o corpo enviado nem a chave.
+   const errors = Array.isArray((parsed as { errors?: unknown } | null)?.errors) ? (parsed as { errors: { code?: unknown; description?: unknown }[] }).errors : [];
+   const reasons = errors.map((e) => String(e?.description ?? e?.code ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim()).filter(Boolean).slice(0, 3).join(' ').slice(0, 300);
+   const step = path.startsWith('/customers') ? ' ao cadastrar o cliente' : path.startsWith('/payments') ? ' ao criar a cobrança' : '';
+   const auth = response.status === 401 ? ' Confira a API key e se ela é do ambiente escolhido (Sandbox ou Produção).' : '';
+   throw new AsaasError(`Asaas recusou${step} (HTTP ${response.status}): ${reasons || 'sem detalhe informado.'}${auth}`, response.status >= 500 || response.status === 429);
   }
   if (!parsed || typeof parsed !== 'object') throw new AsaasError('Resposta inválida do Asaas; resultado desconhecido.', true);
   return parsed as T;

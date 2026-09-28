@@ -7,9 +7,10 @@ import {createStore,createProduct} from '../lib/catalog/service.ts';
 import {createCustomer} from '../lib/customers/service.ts';
 import {registerUnit,createOrder,completeOrder} from '../lib/orders/service.ts';
 import {openSession} from '../lib/cash/service.ts';
-import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders,getBillingConfigSummary} from '../lib/billing/service.ts';
+import {saveBillingConfig,prepareSchedule,billingView,issueReceivable,syncReceivable,monthlyDates,validBillingDate,receiveAsaasEvent,closeRental,listReceivablesOverview,customerReminders,getBillingConfigSummary,asaasPhone} from '../lib/billing/service.ts';
 import type {Actor} from '../lib/domain.ts';
 import type {AsaasPayment,BillingFetch} from '../lib/billing/asaas.ts';
+import {AsaasClient} from '../lib/billing/asaas.ts';
 const now=Date.UTC(2026,8,26,15);
 process.env.FISCAL_SECRET_KEY='MOCK-TEST-ONLY-billing-key-32-characters';
 // MOCK EXPLÍCITO do Asaas: somente testes. Produção usa fetch e os endpoints oficiais.
@@ -145,4 +146,25 @@ test('resumo da configuração por loja: nunca devolve segredos e trava o ambien
  await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
  assert.equal((await getBillingConfigSummary(f.db,f.tenant,f.store,f.actor)).environmentLocked,true);
  await assert.rejects(()=>getBillingConfigSummary(f.db,f.tenant,f.store,{...f.actor,permissions:permissionsForRole('OPERADOR_CAIXA')}),/permiss/i);
+});
+
+test('Asaas: telefone no formato aceito e motivo da recusa mostrado ao usuário',async()=>{
+ assert.deepEqual(asaasPhone('(21) 98508-0634'),{mobilePhone:'21985080634'});
+ assert.deepEqual(asaasPhone('+55 21 98508-0634'),{mobilePhone:'21985080634'});
+ assert.deepEqual(asaasPhone('(21) 3333-4444'),{phone:'2133334444'});
+ assert.deepEqual(asaasPhone('123'),{});
+ // MOCK do erro documentado do Asaas: { errors: [{ code, description }] }.
+ const fetcher:BillingFetch=async()=>new Response(JSON.stringify({errors:[{code:'invalid_cpfCnpj',description:'O CPF/CNPJ informado é inválido.'}]}),{status:400});
+ await assert.rejects(()=>new AsaasClient('MOCK-key','SANDBOX',fetcher).call('POST','/customers',{}),/ao cadastrar o cliente \(HTTP 400\): O CPF\/CNPJ informado é inválido\./);
+ const f2:BillingFetch=async()=>new Response('{}',{status:401});
+ await assert.rejects(()=>new AsaasClient('MOCK-key','SANDBOX',f2).call('GET','/payments'),/HTTP 401.*API key/);
+});
+test('Asaas: boleto sem multa/juros não envia os objetos zerados; CPF vai só com dígitos',async()=>{
+ const f=await fixture();await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
+ const bodies:Record<string,unknown>[]=[];
+ const spy:BillingFetch=async(url,init)=>{if(init?.method==='POST')bodies.push(JSON.parse(String(init.body)));return f.mock.fetcher(url,init);};
+ const r=(await billingView(f.db,f.tenant,f.id,f.actor)).receivables[0];
+ await issueReceivable(f.db,f.tenant,r.id,f.actor,spy,now);
+ const payment=bodies.find(b=>b.billingType==='BOLETO')!;
+ assert.ok(!('fine' in payment)&&!('interest' in payment));
 });
