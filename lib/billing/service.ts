@@ -8,7 +8,7 @@ import { dayKey } from '../time.ts';
 import { AsaasClient, AsaasError, type AsaasPayment, type BillingFetch } from './asaas.ts';
 
 type Config = {store_id: string; tenant_id: string; environment: string; api_key_enc: string; webhook_secret_enc: string; webhook_key: string; notifications_enabled: number};
-type Order = {id: string; store_id: string; customer_id: string; type: string; status: string; total: number; down_payment: number; installments: number; first_due_date: string; monthly_amount: number; adhesion_amount: number; adhesion_billing: string; due_day: number; unit_id: string; product_id: string};
+type Order = {id: string; number: number; store_id: string; customer_id: string; type: string; status: string; total: number; down_payment: number; installments: number; first_due_date: string; monthly_amount: number; adhesion_amount: number; adhesion_billing: string; due_day: number; unit_id: string; product_id: string};
 export type Receivable = {id: string; tenant_id: string; store_id: string; order_id: string; customer_id: string; kind: string; sequence: number; amount: number; due_date: string; fine_bp: number; interest_bp: number; environment: string; status: string; provider_status: string; external_ref: string; provider_id: string | null; provider_customer_id: string | null; invoice_url: string; last_error: string; checked_at: number | null; created_at: number; updated_at: number};
 const enc = (s: string) => JSON.stringify(encryptPayload(s));
 function dec(s: string): string { try { return decryptPayload(JSON.parse(s)).toString('utf8'); } catch { throw new RuleError('Credenciais Asaas ilegíveis. Confira a chave de criptografia do servidor.',409); } }
@@ -91,6 +91,9 @@ async function loadReceivable(db:D1Database,tenant:string,id:string) {const r=aw
 // Telefone no formato do Asaas (DDD + número, só dígitos): celular (11 dígitos, começa com 9 após o
 // DDD) vai em mobilePhone; fixo (10 dígitos) em phone; qualquer outro formato não é enviado (o
 // telefone é opcional no Asaas e um valor fora do padrão recusaria o cadastro inteiro).
+const ASAAS_REF_MAX=100;
+function assertAsaasRef(ref:string):string{if(ref.length>ASAAS_REF_MAX)throw new RuleError(`Referência externa com ${ref.length} caracteres (o Asaas aceita até ${ASAAS_REF_MAX}). Nada foi enviado.`,500);return ref;}
+const KIND_LABEL:Record<string,string>={INSTALLMENT:'Parcela',RENT:'Mensalidade',ADHESION:'Adesão',RESIDUAL:'Compra residual',DAMAGE:'Avarias'};
 export function asaasPhone(raw:string):{mobilePhone?:string;phone?:string}{
  const d=String(raw??'').replace(/\D/g,'').replace(/^0+/,'').replace(/^55(?=\d{10,11}$)/,'');
  if(/^\d{2}9\d{8}$/.test(d))return {mobilePhone:d};
@@ -130,7 +133,9 @@ export async function issueReceivable(db:D1Database,tenant:string,id:string,acto
  try {
   const existing=await api.findPayment(r.external_ref);
   if(existing.data.length){if(existing.data.length!==1||existing.hasMore)throw new RuleError('Referência duplicada no Asaas.',409);await applyPayment(db,r,existing.data[0],now);return;}
-  const ref=`omnihub-${tenant}-${r.store_id}-${r.customer_id}`;
+  // externalReference do Asaas aceita no máximo 100 caracteres (confirmado pelo usuário no Sandbox).
+  // O id do cliente já é único; cada loja usa a própria conta Asaas.
+  const ref=assertAsaasRef(`omnihub-${r.customer_id}`);
   const customers=await api.call<{data:{id:string;cpfCnpj:string}[];hasMore:boolean}>('GET','/customers?limit=100&externalReference='+encodeURIComponent(ref));
   if(!Array.isArray(customers.data)||customers.data.length>1||customers.hasMore)throw new RuleError('Cadastro duplicado no Asaas; confira o cliente.',409);
   let cust=customers.data[0];
@@ -138,7 +143,7 @@ export async function issueReceivable(db:D1Database,tenant:string,id:string,acto
   if(!cust?.id || cust.cpfCnpj.replace(/\D/g,'')!==customer.document.replace(/\D/g,''))throw new RuleError('Cliente retornado pelo Asaas diverge do cadastro.',409);
   await db.prepare('UPDATE order_receivables SET provider_customer_id=? WHERE id=?').bind(cust.id,id).run();r.provider_customer_id=cust.id;
   paymentStarted=true;
-  const p=await api.createPayment({customer:cust.id,billingType:'BOLETO',value:Number(r.amount)/100,dueDate:r.due_date,externalReference:r.external_ref,description:`Pedido ${o.id} - ${r.kind} ${r.sequence}`,...(Number(r.fine_bp)>0?{fine:{value:Number(r.fine_bp)/100,type:'PERCENTAGE'}}:{}),...(Number(r.interest_bp)>0?{interest:{value:Number(r.interest_bp)/100}}:{})});
+  const p=await api.createPayment({customer:cust.id,billingType:'BOLETO',value:Number(r.amount)/100,dueDate:r.due_date,externalReference:assertAsaasRef(r.external_ref),description:`Pedido #${o.number} - ${KIND_LABEL[r.kind]??r.kind} ${r.sequence}`,...(Number(r.fine_bp)>0?{fine:{value:Number(r.fine_bp)/100,type:'PERCENTAGE'}}:{}),...(Number(r.interest_bp)>0?{interest:{value:Number(r.interest_bp)/100}}:{})});
   await applyPayment(db,r,p,now);
   await audit(db,tenant,o,actor,'billing.issue','Boleto emitido e vinculado ao pedido',now);
  }catch(error){

@@ -168,3 +168,23 @@ test('Asaas: boleto sem multa/juros não envia os objetos zerados; CPF vai só c
  const payment=bodies.find(b=>b.billingType==='BOLETO')!;
  assert.ok(!('fine' in payment)&&!('interest' in payment));
 });
+
+test('Asaas: referências externas cabem no limite de 100 caracteres e descrição usa o número do pedido',async()=>{
+ const f=await fixture();await prepareSchedule(f.db,f.tenant,f.id,{fineBp:0,interestBp:0},f.actor,now);
+ const bodies:{url:string;body:Record<string,unknown>}[]=[];
+ // MOCK: GET /customers sem resultado força o cadastro (POST /customers) para inspecionar o corpo.
+ const spy:BillingFetch=async(url,init)=>{
+  const u=new URL(String(url));
+  if(u.pathname.endsWith('/customers')&&(init?.method??'GET')==='GET')return new Response(JSON.stringify({data:[],hasMore:false}),{status:200});
+  if(u.pathname.endsWith('/customers')&&init?.method==='POST'){const b=JSON.parse(String(init.body));bodies.push({url:u.pathname,body:b});return new Response(JSON.stringify({id:'cus_mock',cpfCnpj:b.cpfCnpj}),{status:200});}
+  if(init?.method==='POST')bodies.push({url:u.pathname,body:JSON.parse(String(init.body))});
+  return f.mock.fetcher(url,init);
+ };
+ const r=(await billingView(f.db,f.tenant,f.id,f.actor)).receivables[0];
+ await issueReceivable(f.db,f.tenant,r.id,f.actor,spy,now);
+ const customer=bodies.find(b=>b.url.endsWith('/customers'))!.body, payment=bodies.find(b=>b.url.endsWith('/payments'))!.body;
+ assert.equal(customer.externalReference,`omnihub-${f.customer}`);
+ assert.ok(String(customer.externalReference).length<=100&&String(payment.externalReference).length<=100);
+ assert.equal(customer.cpfCnpj,'52998224725');
+ assert.match(String(payment.description),/^Pedido #\d+ - Parcela 1$/);
+});
