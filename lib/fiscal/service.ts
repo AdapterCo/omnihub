@@ -14,7 +14,8 @@ import {
 } from './certificate.ts';
 import { resolveSefazEndpoint } from './endpoints.ts';
 import { SefazDirectGateway, type FiscalGateway } from './gateway.ts';
-import { buildNFeXml, type NFeItem, type NFePayment } from './builder.ts';
+import { buildNFeXml, fiscalPaymentCode, type NFeItem, type NFePayment } from './builder.ts';
+import { requireUnit, resolveSaleOperation } from './operation.ts';
 import { validateNFeXmlSchema } from './validator.ts';
 import { signNFeXml, signEventXml, signInutilizacaoXml } from './signer.ts';
 import { getNextFiscalNumber } from './sequence.ts';
@@ -45,7 +46,9 @@ export type FiscalStoreConfig = {
     environment: 'homologacao';
     model: '55';
     series: number;
-    crt: CRT;
+    // null = regime ainda não escolhido (nunca mostrar um regime presumido).
+    crt: CRT | null;
+    natureOfOperation: string;
     certificate?: CertificateSummary | null;
     status: 'NOT_CONFIGURED' | 'CONFIGURED' | 'CERTIFICATE_VALID' | 'CONNECTIVITY_VALIDATED';
 };
@@ -53,6 +56,7 @@ export type FiscalStoreConfig = {
 export const fiscalConfigInputSchema = z.object({
     series: z.number().int().min(1, 'Série deve ser maior ou igual a 1.').max(999, 'Série máxima é 999.').default(1),
     crt: z.enum(['1_SIMPLES_NACIONAL', '2_SIMPLES_EXCESSO', '3_REGIME_NORMAL']),
+    natureOfOperation: z.string().trim().min(1, 'Informe a natureza da operação.').max(60, 'Natureza da operação: no máximo 60 caracteres.'),
 }).strict();
 
 export type FiscalConfigInput = z.infer<typeof fiscalConfigInputSchema>;
@@ -88,13 +92,13 @@ export async function getFiscalStoreConfig(
 
     const configRow = await db
         .prepare(
-            `SELECT id, tenant_id AS tenantId, store_id AS storeId, environment, model, series, crt,
+            `SELECT id, tenant_id AS tenantId, store_id AS storeId, environment, model, series, crt, nat_op AS natOp,
                     certificate_id AS certificateId, created_at AS createdAt, updated_at AS updatedAt
              FROM fiscal_configurations
              WHERE tenant_id = ? AND store_id = ? AND model = '55'`,
         )
         .bind(tenantId, storeId)
-        .first<FiscalConfiguration>();
+        .first<FiscalConfiguration & { natOp?: string | null }>();
 
     let certificate: CertificateSummary | null = null;
     const certId = configRow?.certificateId;
@@ -135,7 +139,8 @@ export async function getFiscalStoreConfig(
         environment: 'homologacao',
         model: '55',
         series: configRow?.series ?? 1,
-        crt: configRow?.crt ?? '1_SIMPLES_NACIONAL',
+        crt: configRow?.crt || null,
+        natureOfOperation: configRow?.natOp ?? '',
         certificate,
         status,
     };
@@ -171,20 +176,20 @@ export async function saveFiscalStoreConfig(
         await db
             .prepare(
                 `UPDATE fiscal_configurations SET
-                 series = ?, crt = ?, updated_at = ?
+                 series = ?, crt = ?, nat_op = ?, updated_at = ?
                  WHERE id = ? AND tenant_id = ?`,
             )
-            .bind(input.series, input.crt, now, existing.id, tenantId)
+            .bind(input.series, input.crt, input.natureOfOperation, now, existing.id, tenantId)
             .run();
     } else {
         const id = randomUUID();
         await db
             .prepare(
                 `INSERT INTO fiscal_configurations (
-                     id, tenant_id, store_id, environment, model, series, crt, created_at, updated_at
-                 ) VALUES (?, ?, ?, 'homologacao', '55', ?, ?, ?, ?)`,
+                     id, tenant_id, store_id, environment, model, series, crt, nat_op, created_at, updated_at
+                 ) VALUES (?, ?, ?, 'homologacao', '55', ?, ?, ?, ?, ?)`,
             )
-            .bind(id, tenantId, storeId, input.series, input.crt, now, now)
+            .bind(id, tenantId, storeId, input.series, input.crt, input.natureOfOperation, now, now)
             .run();
     }
 }
@@ -229,7 +234,7 @@ export async function uploadCertificate(
             .prepare(
                 `INSERT INTO fiscal_configurations (
                      id, tenant_id, store_id, environment, model, series, crt, certificate_id, created_at, updated_at
-                 ) VALUES (?, ?, ?, 'homologacao', '55', 1, '1_SIMPLES_NACIONAL', ?, ?, ?)`,
+                 ) VALUES (?, ?, ?, 'homologacao', '55', 1, '', ?, ?, ?)`, // regime em branco até a loja escolher
             )
             .bind(configId, tenantId, storeId, saved.id, now, now)
             .run();
@@ -469,12 +474,12 @@ export async function generateNFeForSale(
     // 4. Carrega configuração fiscal da loja (série e CRT)
     const fiscalConfig = await db
         .prepare(
-            `SELECT series, crt
+            `SELECT series, crt, nat_op AS natOp
              FROM fiscal_configurations
              WHERE tenant_id = ? AND store_id = ? AND model = '55'`,
         )
         .bind(tenantId, sale.storeId)
-        .first<{ series: number; crt: CRT }>();
+        .first<{ series: number; crt: CRT; natOp: string | null }>();
 
     // Nunca presumir o regime tributário (§37: "não assumir que todas as empresas sejam
     // Simples Nacional"). Sem configuração fiscal salva (fiscal.config.save) para a loja,
@@ -484,6 +489,14 @@ export async function generateNFeForSale(
     }
     const series = fiscalConfig.series;
     const crt = fiscalConfig.crt;
+    if (!crt) throw new RuleError('Escolha o regime tributário (CRT) da loja em Configuração fiscal antes de emitir NF-e.', 400);
+    const natOp = String(fiscalConfig.natOp ?? '').trim();
+    if (!natOp) throw new RuleError('Informe a natureza da operação em Configuração fiscal (NF-e) da loja antes de emitir.', 400);
+    const storeNumber = String(store.number ?? '').trim();
+    if (!storeNumber) throw new RuleError('Informe o número do endereço da loja no cadastro (se não houver número, escreva "SN").', 400);
+    // indPres a partir da venda (PDV = presencial; pedido = forma informada pelo vendedor) e
+    // bloqueio de venda interestadual (idDest 2 ainda não suportado).
+    const operation = await resolveSaleOperation(db, tenantId, saleId, cleanUf, '55');
 
     // 5. Carrega itens da venda e respectivos perfis fiscais
     const itemsRows = await db
@@ -536,7 +549,7 @@ export async function generateNFeForSale(
             ncm: cleanNcm,
             cest: item.cest ? item.cest.replace(/\D/g, '') : undefined,
             cfop: cleanCfop,
-            unit: item.unit || 'UN',
+            unit: requireUnit(item.unit, item.name),
             qty: item.qty,
             unitPrice: item.priceCents,
             totalPrice: item.qty * item.priceCents,
@@ -559,17 +572,18 @@ export async function generateNFeForSale(
         throw new RuleError('A venda não possui pagamentos registrados; não é possível emitir o documento fiscal.', 400);
     }
     const nfePayments: NFePayment[] = paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }));
+    // Confere o tPag antes de consumir um número da série.
+    nfePayments.forEach((p) => fiscalPaymentCode(p.method));
 
-    // 7. Destinatário (em homologação, se não informado na venda, preenche consumidor homologação)
-    const recipient = sale.document
-        ? {
-              document: sale.document.replace(/\D/g, ''),
-              name: sale.customer || 'CONSUMIDOR FINAL',
-          }
-        : {
-              document: '00000000000',
-              name: 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL',
-          };
+    // 7. Destinatário: a NF-e exige cliente identificado. Sem CPF/CNPJ na venda, bloqueia (antes
+    //    saía com CPF "00000000000", que não existe) e orienta a emitir NFC-e.
+    const recipientDoc = (sale.document || '').replace(/\D/g, '');
+    if (recipientDoc.length !== 11 && recipientDoc.length !== 14) {
+        throw new RuleError('A NF-e exige o CPF ou CNPJ do cliente na venda. Para consumidor não identificado, emita NFC-e.', 400);
+    }
+    const recipientName = String(sale.customer ?? '').trim();
+    if (!recipientName) throw new RuleError('Informe o nome do cliente na venda para emitir a NF-e.', 400);
+    const recipient = { document: recipientDoc, name: recipientName };
 
     // 8. Obtenção atômica do próximo número sequencial da série
     const number = await getNextFiscalNumber(db, tenantId, sale.storeId, '55', series);
@@ -590,13 +604,15 @@ export async function generateNFeForSale(
             city: store.city || '',
             municipalityCode: cleanMun,
             address: store.address,
-            number: store.number || 'SN',
+            number: storeNumber,
             district: store.district,
             zip: store.zip,
         },
         recipient,
         items: nfeItems,
         payments: nfePayments,
+        natureOfOperation: natOp,
+        presence: operation.presence,
     });
 
     // 10. Validação Sintática formal contra os schemas XSD oficiais do pacote PL_009k
@@ -1235,7 +1251,7 @@ export async function getDanfeData(db: D1Database, tenantId: string, saleId: str
         authorizedAt: doc.authorizedAt,
         environment: 'homologacao',
         issuer: { legalName: store.legalName || store.name, tradeName: store.name, cnpj: store.cnpj, ie: store.ie, address: store.address, number: store.number, district: store.district, city: store.city, uf: store.uf, zip: store.zip },
-        recipient: { name: sale?.customer || 'CONSUMIDOR FINAL', document: sale?.document || '' },
+        recipient: { name: sale?.customer || '', document: sale?.document || '' },
         items,
         payments: paymentRows.results.map((p) => ({ method: p.method, amount: p.amount })),
         total,

@@ -76,7 +76,7 @@ async function fixture() {
 
 async function motoOrder(f: Awaited<ReturnType<typeof fixture>>, storeId = f.dmax, serial = 'LXYJCBL01P0123456') {
     const unit = await registerUnit(f.db, f.tenantId, { storeId, productId: f.moto, serial, color: 'Vermelha' }, f.owner, NOW);
-    return createOrder(f.db, f.tenantId, { storeId, type: 'VENDA', customerId: f.customerId, unitId: unit, total: 900000, purchaseDate: '2026-09-26', installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', firstDueDate: '2026-10-26' }, f.seller, NOW);
+    return createOrder(f.db, f.tenantId, { storeId, type: 'VENDA', customerId: f.customerId, unitId: unit, total: 900000, purchaseDate: '2026-09-26', installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL', firstDueDate: '2026-10-26' }, f.seller, NOW);
 }
 
 test('modelos: todo placeholder usado no texto tem valor com dados completos; nada fica sem substituir', () => {
@@ -189,7 +189,7 @@ test('revisões: gerar de novo substitui a anterior; alterar o pedido invalida; 
     // Os dois PDFs continuam guardados.
     assert.equal((await listOrderDocuments(f.db, f.tenantId, f.owner)).filter((d) => d.type === 'CONTRATO_ORIGINAL').length, 2);
     const unitId = (await f.db.prepare('SELECT unit_id AS u FROM orders WHERE id = ?').bind(orderId).first<{ u: string }>())!.u;
-    await updateOrder(f.db, f.tenantId, orderId, { customerId: f.customerId, unitId, total: 850000, purchaseDate: '2026-09-26', installments: 0, downPayment: 850000, downPaymentMethod: 'Dinheiro' }, f.seller, NOW);
+    await updateOrder(f.db, f.tenantId, orderId, { customerId: f.customerId, unitId, total: 850000, purchaseDate: '2026-09-26', installments: 0, downPayment: 850000, downPaymentMethod: 'Dinheiro', saleChannel: 'PRESENCIAL' }, f.seller, NOW);
     contracts = await listContracts(f.db, f.tenantId, f.owner);
     assert.ok(contracts.every((c) => c.status === 'SUPERSEDED'), 'dados mudaram: contrato anterior deixa de valer');
     const third = await generateContract(f.db, f.storage, f.tenantId, orderId, f.seller, NOW);

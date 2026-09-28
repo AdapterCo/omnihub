@@ -349,7 +349,7 @@ async function finalizeCharge(
     db: D1Database,
     charge: ChargeRow,
     status: 'PAID' | 'FAILED' | 'CANCELLED' | 'EXPIRED',
-    info: { providerStatus: string; providerStatusDetail: string; error?: string; resolvedBy?: string; resolutionNote?: string },
+    info: { providerStatus: string; providerStatusDetail: string; error?: string; resolvedBy?: string; resolutionNote?: string; cardType?: string | null },
     now: number,
 ): Promise<boolean> {
     const claim = await db
@@ -363,6 +363,11 @@ async function finalizeCharge(
 
     if (status === 'PAID') {
         await db.prepare("UPDATE sales SET status = 'COMPLETED' WHERE id = ? AND status = 'PENDING_PAYMENT'").bind(charge.saleId).run();
+        // A venda da maquininha nasce como "Cartão"; o crédito/débito vem da própria transação
+        // (a nota fiscal exige o tipo). Sem a informação do provedor, fica "Cartão" e a nota
+        // bloqueia com explicação — nunca presume crédito.
+        const cardMethod = info.cardType === 'credit_card' ? 'Cartão de crédito' : info.cardType === 'debit_card' ? 'Cartão de débito' : null;
+        if (cardMethod) await db.prepare("UPDATE sale_payments SET method = ? WHERE sale_id = ? AND method = 'Cartão'").bind(cardMethod, charge.saleId).run();
     } else {
         const voided = await db.prepare("UPDATE sales SET status = 'CANCELLED' WHERE id = ? AND status = 'PENDING_PAYMENT'").bind(charge.saleId).run();
         if (voided.meta.changes === 1) {
@@ -402,7 +407,7 @@ async function applyOrder(db: D1Database, charge: ChargeRow, order: MpOrder, now
             logger.error('payment.valor_divergente', { chargeId: charge.id, esperado: Number(charge.amount), recebido: order.totalAmountCents });
             return;
         }
-        await finalizeCharge(db, charge, 'PAID', { providerStatus: order.status, providerStatusDetail: order.statusDetail }, now);
+        await finalizeCharge(db, charge, 'PAID', { providerStatus: order.status, providerStatusDetail: order.statusDetail, cardType: order.cardType }, now);
         return;
     }
     if (mapped === 'FAILED' || mapped === 'CANCELLED' || mapped === 'EXPIRED') {

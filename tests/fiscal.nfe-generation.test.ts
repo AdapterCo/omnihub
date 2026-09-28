@@ -61,7 +61,7 @@ async function setupFiscalFixture() {
         owner,
     );
 
-    await saveFiscalStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL' }, owner);
+    await saveFiscalStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria' }, owner);
 
     const productId = await createProduct(
         db,
@@ -249,7 +249,7 @@ test('Numeração sequencial e atômica da NF-e por loja e série', async () => 
     const sale1 = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
     const doc1 = await generateNFeForSale(db, 't1', sale1, owner);
@@ -259,7 +259,7 @@ test('Numeração sequencial e atômica da NF-e por loja e série', async () => 
     const sale2 = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Pix' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Pix' },
         op,
     );
     const doc2 = await generateNFeForSale(db, 't1', sale2, owner);
@@ -273,7 +273,7 @@ test('Impede duplicidade de emissão de NF-e para a mesma venda', async () => {
     const saleId = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
 
@@ -292,7 +292,7 @@ test('Rejeita emissão para venda cancelada', async () => {
     const saleId = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
 
@@ -349,7 +349,7 @@ test('Rejeita geração se dados cadastrais obrigatórios da loja estiverem ause
     const saleId = await createSale(
         db,
         't2',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
 
@@ -399,7 +399,7 @@ test('Rejeita geração se a loja não tiver configuração fiscal salva (nunca 
 
     const op = { ...operator, storeId };
     await openSession(db, 't3', storeId, 0, op);
-    const saleId = await createSale(db, 't3', { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' }, op);
+    const saleId = await createSale(db, 't3', { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' }, op);
 
     await assert.rejects(
         () => generateNFeForSale(db, 't3', saleId, owner),
@@ -443,8 +443,8 @@ test('Rejeita geração se produto não possuir NCM válido de 8 dígitos', asyn
         {
             storeId,
             items: [{ productId: productWithoutNcm, qty: 1 }],
-            customer: '',
-            document: '',
+            customer: 'Cliente MOCK',
+            document: '52998224725',
             payment: 'Dinheiro',
         },
         op,
@@ -493,8 +493,8 @@ test('Rejeita geração se produto não possuir CFOP cadastrado (nunca presume "
         {
             storeId,
             items: [{ productId: productWithoutCfop, qty: 1 }],
-            customer: '',
-            document: '',
+            customer: 'Cliente MOCK',
+            document: '52998224725',
             payment: 'Dinheiro',
         },
         op,
@@ -512,7 +512,7 @@ test('Isolamento multitenant: operador de outro tenant não consegue gerar NF-e'
     const saleId = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
 
@@ -536,7 +536,7 @@ test('listFiscalDocumentsForSnapshot retorna documentos fiscais mapeados por sal
     const saleId = await createSale(
         db,
         't1',
-        { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' },
+        { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' },
         op,
     );
 

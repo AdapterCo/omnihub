@@ -48,7 +48,8 @@ export type NFCeStoreConfig = {
     environment: 'homologacao';
     model: '65';
     series: number;
-    crt: CRT;
+    crt: CRT | null;
+    natureOfOperation: string;
     cscId: string | null;
     cscConfigured: boolean;
     qrCodeBaseUrl: string | null;

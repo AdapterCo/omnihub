@@ -13,7 +13,10 @@ import { OrderBilling } from './order-billing';
 type Act = (command: unknown) => Promise<unknown>;
 type Values = Record<string, string>;
 
-const STORE_METHODS = ['Dinheiro', 'Pix', 'Cartão'];
+const STORE_METHODS = ['Dinheiro', 'Pix', 'Cartão de crédito', 'Cartão de débito'];
+// Mesmos valores de lib/fiscal/operation.ts (SALE_CHANNELS): definem o indPres da nota fiscal.
+const SALE_CHANNEL_LABEL: Record<string, string> = { PRESENCIAL: 'Na loja (presencial)', INTERNET: 'Pela internet / WhatsApp', ENTREGA: 'Entrega em domicílio' };
+const SALE_CHANNEL_OPTIONS = Object.entries(SALE_CHANNEL_LABEL).map(([value, label]) => ({ value, label }));
 const ORDER_STATUS: Record<string, { label: string; tone: string }> = {
  OPEN: { label: 'Em aberto (unidade reservada)', tone: 'warning' },
  COMPLETING: { label: 'Finalizando...', tone: 'warning' },
@@ -96,7 +99,7 @@ export function OrdersPage({ data, act, stores, storeFilter, busy, active, refre
 function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data: Snapshot; act: Act; stores: StoreRecord[]; order: OrderView | null; busy: boolean; onClose: () => void; onSaved: (id?: string) => void }) {
  const [v, setV] = useState<Values>((): Values => order ? {
   storeId: order.storeId, type: order.type, customerId: order.customerId, unitId: order.unitId,
-  total: fromCents(order.total), purchaseDate: order.purchaseDate, downPayment: fromCents(order.downPayment), downPaymentMethod: order.downPaymentMethod,
+  total: fromCents(order.total), purchaseDate: order.purchaseDate, downPayment: fromCents(order.downPayment), downPaymentMethod: order.downPaymentMethod, saleChannel: order.saleChannel,
   installments: String(order.installments), firstDueDate: order.firstDueDate,
   adhesionAmount: fromCents(order.adhesionAmount), adhesionBilling: order.adhesionBilling, adhesionPaymentMethod: order.adhesionPaymentMethod,
   monthlyAmount: fromCents(order.monthlyAmount), dueDay: order.dueDay ? String(order.dueDay) : '',
@@ -117,7 +120,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
   if (!v.storeId || !type || !v.customerId || !v.unitId) { setError('Escolha a loja, o tipo, o cliente e a unidade.'); return; }
   const terms: Record<string, unknown> = { customerId: v.customerId, unitId: v.unitId };
   if (type === 'VENDA') {
-   Object.assign(terms, { total: toCents(v.total), purchaseDate: v.purchaseDate, installments, downPayment: installments === 0 ? toCents(v.total) : toCents(v.downPayment || '0'), downPaymentMethod: v.downPaymentMethod || undefined });
+   Object.assign(terms, { total: toCents(v.total), purchaseDate: v.purchaseDate, installments, downPayment: installments === 0 ? toCents(v.total) : toCents(v.downPayment || '0'), downPaymentMethod: v.downPaymentMethod || undefined, saleChannel: v.saleChannel || undefined });
    if (installments > 0) terms.firstDueDate = v.firstDueDate;
   } else {
    Object.assign(terms, { adhesionAmount: toCents(v.adhesionAmount), monthlyAmount: toCents(v.monthlyAmount), firstDueDate: v.firstDueDate, adhesionBilling: 'LOJA', adhesionPaymentMethod: v.adhesionPaymentMethod || undefined });
@@ -135,6 +138,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
    {type === 'VENDA' && <>
     <Field label="Valor da venda (R$)"><input inputMode="decimal" value={v.total ?? ''} onChange={(e) => set('total', e.target.value)} /></Field>
     <Field label="Data da compra"><input type="date" value={v.purchaseDate ?? ''} onChange={(e) => set('purchaseDate', e.target.value)} /></Field>
+    <Field label="Como o cliente comprou" hint="Vai para a nota fiscal. Internet e entrega exigem a UF no cadastro do cliente (venda para outro estado ainda não é emitida)."><NativePick value={v.saleChannel ?? ''} onChange={(x) => set('saleChannel', x)} options={SALE_CHANNEL_OPTIONS} /></Field>
     <Field label="Parcelas no boleto" hint="0 = pagamento total na loja."><input type="number" min={0} max={60} value={v.installments ?? '0'} onChange={(e) => set('installments', e.target.value)} /></Field>
     {installments > 0 ? <Field label="Entrada recebida na loja (R$)" hint="0 se não houver entrada."><input inputMode="decimal" value={v.downPayment ?? ''} onChange={(e) => set('downPayment', e.target.value)} /></Field> : <div />}
     {(installments === 0 || toCents(v.downPayment || '0') > 0) && <Field label={installments === 0 ? 'Forma de pagamento na loja' : 'Forma da entrada'}><NativePick value={v.downPaymentMethod ?? ''} onChange={(x) => set('downPaymentMethod', x)} options={STORE_METHODS.map((m) => ({ value: m, label: m }))} /></Field>}
@@ -168,6 +172,7 @@ function OrderDetail({ order, contracts, documents, act, refresh, perms, busy, a
   ...(order.type === 'LOCACAO' ? [['Memória', order.memory], ['Estado do aparelho', order.condition]] as [string, ReactNode][] : []),
   ...(order.type === 'VENDA' ? [
    ['Valor', money(order.total)], ['Data da compra', brDate(order.purchaseDate)],
+   ['Como comprou', SALE_CHANNEL_LABEL[order.saleChannel] ?? 'Não informado — edite o pedido antes de emitir a nota'],
    ['Pagamento', order.installments ? `Entrada ${money(order.downPayment)}${order.downPaymentMethod ? ` (${order.downPaymentMethod})` : ''} + ${order.installments}x no boleto, 1º vencimento ${brDate(order.firstDueDate)}` : `À vista na loja (${order.downPaymentMethod})`],
   ] as [string, ReactNode][] : [
    ['Adesão', `${money(order.adhesionAmount)} · ${order.adhesionBilling === 'BOLETO' ? 'boleto' : `na loja (${order.adhesionPaymentMethod})`}`],

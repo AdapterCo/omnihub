@@ -25,6 +25,9 @@ export type MpOrder = {
     totalAmountCents: number | null;
     qrData: string | null;
     externalReference: string;
+    // Tipo do cartão usado na maquininha (transactions.payments[].payment_method.type):
+    // 'credit_card' / 'debit_card'; null quando o provedor não informa.
+    cardType: string | null;
 };
 
 /** Valor em centavos -> string com 2 casas exigida pela API ("24.00"). */
@@ -50,7 +53,18 @@ function parseOrder(json: Record<string, unknown>): MpOrder {
         totalAmountCents: amountToCents(json.total_amount),
         qrData: typeof typeResponse.qr_data === 'string' ? typeResponse.qr_data : null,
         externalReference: String(json.external_reference ?? ''),
+        cardType: readCardType(json),
     };
+}
+
+function readCardType(json: Record<string, unknown>): string | null {
+    const transactions = (json.transactions ?? {}) as Record<string, unknown>;
+    const payments = Array.isArray(transactions.payments) ? (transactions.payments as Record<string, unknown>[]) : [];
+    for (const payment of payments) {
+        const method = (payment?.payment_method ?? {}) as Record<string, unknown>;
+        if (typeof method.type === 'string' && method.type) return method.type;
+    }
+    return null;
 }
 
 /** Erro do provedor com a mensagem da API (sem o token) e se vale tentar de novo. */

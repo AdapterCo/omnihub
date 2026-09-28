@@ -118,6 +118,8 @@ test('NFeBuilder: constrói XML oficial no Layout 4.00 e bloqueia campos inváli
     const emissionDate = new Date('2026-09-16T15:30:00Z');
 
     const result = buildNFeXml({
+        natureOfOperation: 'Venda de mercadoria',
+        presence: '1',
         environment: 'homologacao',
         series: 1,
         number: 1,
@@ -167,6 +169,8 @@ test('NFeBuilder: constrói XML oficial no Layout 4.00 e bloqueia campos inváli
     // Bloqueio de NCM com formato inválido
     assert.throws(() => {
         buildNFeXml({
+            natureOfOperation: 'Venda de mercadoria',
+            presence: '1',
             environment: 'homologacao',
             series: 1,
             number: 1,

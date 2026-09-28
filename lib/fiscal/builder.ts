@@ -47,7 +47,7 @@ export type NFeItem = {
 };
 
 export type NFePayment = {
-    method: string; // 'Dinheiro', 'Pix', 'Cartão'
+    method: string; // 'Dinheiro', 'Pix', 'Cartão de crédito', 'Cartão de débito', 'Boleto'
     amount: number; // em centavos
 };
 
@@ -57,7 +57,10 @@ export type BuildNFeInput = {
     series: number;
     number: number;
     emissionDate: Date;
-    natureOfOperation?: string;
+    // Natureza da operação configurada pela loja (Configuração fiscal) — sem valor padrão.
+    natureOfOperation: string;
+    // indPres: 1 presencial, 2 internet, 4 entrega em domicílio (lib/fiscal/operation.ts).
+    presence: '1' | '2' | '4';
     issuer: NFeIssuer;
     recipient?: NFeRecipient;
     items: NFeItem[];
@@ -75,10 +78,23 @@ export type BuildNFeInput = {
 const PAYMENT_METHOD_MAP: Record<string, string> = {
     Dinheiro: '01',
     Pix: '17',
-    Cartão: '03', // Cartão de crédito padrão
+    // Tabela oficial de tPag: 03 = cartão de crédito, 04 = cartão de débito. "Cartão" sem o tipo
+    // (vendas antigas) não tem código: a emissão bloqueia em vez de presumir crédito.
+    'Cartão de crédito': '03',
+    'Cartão de débito': '04',
     // Venda de pedido com parcelas no boleto (lib/orders): tPag 15 = Boleto Bancário (tabela oficial de tPag).
     Boleto: '15',
 };
+
+/** Código tPag da forma de pagamento; bloqueia quando não há código oficial (nunca presume). */
+export function fiscalPaymentCode(method: string): string {
+    const tPag = PAYMENT_METHOD_MAP[method];
+    if (tPag) return tPag;
+    if (method === 'Cartão') {
+        throw new RuleError('Esta venda foi registrada como "Cartão" sem indicar crédito ou débito; a nota exige o tipo (03 crédito / 04 débito) e ele não pode ser presumido. Vendas novas já registram o tipo.', 422);
+    }
+    throw new RuleError(`Forma de pagamento "${method}" sem código fiscal (tPag) definido. Não é possível emitir o documento.`, 422);
+}
 
 function formatMoney(cents: number): string {
     return (cents / 100).toFixed(2);
@@ -132,12 +148,22 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
 
     const cUF = accessKey.slice(0, 2);
     const cDV = accessKey.slice(-1);
-    const crtCode = issuer.crt === '3_REGIME_NORMAL' ? '3' : issuer.crt === '2_SIMPLES_EXCESSO' ? '2' : '1';
+    const crtCode = ({ '1_SIMPLES_NACIONAL': '1', '2_SIMPLES_EXCESSO': '2', '3_REGIME_NORMAL': '3' } as Record<string, string>)[issuer.crt];
+    if (!crtCode) throw new RuleError('Informe o regime tributário (CRT) da loja em Configuração fiscal.', 400);
 
     // dhEmi: hora LOCAL (America/Sao_Paulo) com o offset calculado. Trocar só o "Z" do UTC por
     // "-03:00" gravaria a emissão 3 horas no futuro e a SEFAZ rejeitaria a nota.
     const dhEmi = isoWithOffset(emissionDate.getTime());
-    const natOp = escapeXml(input.natureOfOperation || 'VENDA DE MERCADORIA');
+    if (!String(input.natureOfOperation ?? '').trim()) {
+        throw new RuleError('Informe a natureza da operação da loja em Configuração fiscal.', 400);
+    }
+    if (!['1', '2', '4'].includes(input.presence)) throw new RuleError('Forma de atendimento da venda (presencial/internet/entrega) não informada.', 400);
+    // NFC-e só existe para venda presencial ou entrega em domicílio.
+    if (model === '65' && input.presence === '2') throw new RuleError('Venda pela internet não pode sair em NFC-e. Emita NF-e.', 400);
+    if (!String(issuer.number ?? '').trim()) {
+        throw new RuleError('Informe o número do endereço da loja no cadastro (se o endereço não tiver número, escreva "SN").', 400);
+    }
+    const natOp = escapeXml(input.natureOfOperation.trim());
 
     let xml = `<?xml version="1.0" encoding="UTF-8"?>`;
     xml += `<NFe xmlns="http://www.portalfiscal.inf.br/nfe">`;
@@ -165,7 +191,7 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     xml += `<tpAmb>${tpAmb}</tpAmb>`;
     xml += `<finNFe>1</finNFe>`; // 1 = Normal
     xml += `<indFinal>1</indFinal>`; // 1 = Consumidor final
-    xml += `<indPres>1</indPres>`; // 1 = Operação presencial
+    xml += `<indPres>${input.presence}</indPres>`; // 1 presencial · 2 internet · 4 entrega (lib/fiscal/operation.ts)
     xml += `<procEmi>0</procEmi>`; // 0 = Emissão de NF-e com aplicativo do contribuinte
     xml += `<verProc>OmniHub 1.0</verProc>`;
     xml += `</ide>`;
@@ -181,7 +207,7 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     }
     xml += `<enderEmit>`;
     xml += `<xLgr>${escapeXml(issuer.address)}</xLgr>`;
-    xml += `<nro>${escapeXml(issuer.number || 'SN')}</nro>`;
+    xml += `<nro>${escapeXml(issuer.number.trim())}</nro>`;
     xml += `<xBairro>${escapeXml(issuer.district)}</xBairro>`;
     xml += `<cMun>${issuer.municipalityCode.replace(/\D/g, '')}</cMun>`;
     xml += `<xMun>${escapeXml(issuer.city)}</xMun>`;
@@ -195,13 +221,16 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     xml += `</emit>`;
 
     // 3. Grupo dest (se informado)
+    if (input.recipient && input.recipient.document && !String(input.recipient.name ?? '').trim()) {
+        throw new RuleError('Informe o nome do cliente na venda: o documento fiscal com CPF/CNPJ exige o nome do destinatário.', 400);
+    }
     if (input.recipient && input.recipient.document) {
         const cleanDoc = input.recipient.document.replace(/\D/g, '');
         const isCpf = cleanDoc.length === 11;
         // Em homologação, o nome do destinatário deve ser a literal exigida se for teste
         const destName = environment === 'homologacao'
             ? 'NF-E EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
-            : escapeXml(input.recipient.name || 'CONSUMIDOR FINAL');
+            : escapeXml(input.recipient.name.trim());
 
         xml += `<dest>`;
         xml += isCpf ? `<CPF>${cleanDoc}</CPF>` : `<CNPJ>${cleanDoc}</CNPJ>`;
@@ -346,8 +375,7 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     xml += `<pag>`;
     payments.forEach((p) => {
         // Forma sem código mapeado bloqueia: '99' (Outros) seria um valor presumido no documento fiscal.
-        const tPag = PAYMENT_METHOD_MAP[p.method];
-        if (!tPag) throw new RuleError(`Forma de pagamento "${p.method}" sem código fiscal (tPag) definido. Não é possível emitir o documento.`, 422);
+        const tPag = fiscalPaymentCode(p.method);
         xml += `<detPag>`;
         xml += `<tPag>${tPag}</tPag>`;
         xml += `<vPag>${formatMoney(p.amount)}</vPag>`;

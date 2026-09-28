@@ -74,7 +74,7 @@ async function fixture() {
   { name: 'Loja Centro', legalName: 'LOJA CENTRO LTDA', cnpj: '12345678000190', ie: '123456789110', uf: 'SP', city: 'São Paulo', municipalityCode: '3550308', address: 'Av Paulista', number: '1000', district: 'Bela Vista', zip: '01310100' },
   owner,
  );
- await saveFiscalStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL' }, owner);
+ await saveFiscalStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria' }, owner);
  const { pfxBuffer } = generateTestPfx('senha123');
  await uploadCertificate(db, 't1', storeId, pfxBuffer, 'senha123', owner);
  return { db, storeId };
@@ -102,7 +102,7 @@ test('inutilizeFiscalNumbering bloqueia faixa que já contém número emitido (n
  await receiveStock(db, { tenantId: 't1', storeId, productId, quantity: 50, userId: owner.userId, reason: 'Estoque inicial' }, owner);
  const op = { ...operator, storeId };
  await openSession(db, 't1', storeId, 0, op);
- const saleId = await createSale(db, 't1', { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' }, op);
+ const saleId = await createSale(db, 't1', { storeId, items: [{ productId, qty: 1 }], customer: 'Cliente MOCK', document: '52998224725', payment: 'Dinheiro' }, op);
  const doc = await generateNFeForSale(db, 't1', saleId, owner);
 
  await assert.rejects(() => inutilizeFiscalNumbering(db, 't1', storeId, 1, doc.number, doc.number, 'Numero pulado por falha antes da emissao', owner, CONFIRMED_MOCK), /já foi utilizado em um documento fiscal/);

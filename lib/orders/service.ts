@@ -1,4 +1,5 @@
 import { RuleError } from '../errors.ts';
+import { SALE_CHANNELS } from '../fiscal/operation.ts';
 import { requirePermission, requireStoreAccess } from '../authz/service.ts';
 import type { Actor, ProductKind, StoreModality } from '../domain.ts';
 import { getStore, storeHasModality } from '../catalog/service.ts';
@@ -18,7 +19,7 @@ import { assertOrderContractsEditable, invalidateOrderContracts } from '../contr
 export const ORDER_TYPES = ['VENDA', 'LOCACAO'] as const;
 export type OrderType = typeof ORDER_TYPES[number];
 // Formas de recebimento na loja: as mesmas do PDV. Boleto é gerado pelo Asaas (fase de cobrança).
-export const STORE_PAYMENT_METHODS = ['Dinheiro', 'Pix', 'Cartão'] as const;
+export const STORE_PAYMENT_METHODS = ['Dinheiro', 'Pix', 'Cartão de crédito', 'Cartão de débito'] as const;
 export type StorePaymentMethod = typeof STORE_PAYMENT_METHODS[number];
 
 // Modelo de contrato de locação v1 (ContratoLocacao.pdf): 12 mensalidades. O número vem do
@@ -143,6 +144,8 @@ export type OrderInput = {
  downPaymentMethod?: string;
  installments?: number;
  firstDueDate?: string;
+ // Como o cliente comprou (venda): vai para o indPres da nota fiscal.
+ saleChannel?: string;
  // Locação
  adhesionAmount?: number;
  adhesionBilling?: 'BOLETO' | 'LOJA';
@@ -152,7 +155,7 @@ export type OrderInput = {
 };
 
 type OrderTerms = {
- total: number; purchase_date: string; down_payment: number; down_payment_method: string; installments: number; first_due_date: string;
+ total: number; purchase_date: string; down_payment: number; down_payment_method: string; installments: number; first_due_date: string; sale_channel: string;
  adhesion_amount: number; adhesion_billing: string; adhesion_payment_method: string; monthly_amount: number; due_day: number;
 };
 
@@ -183,8 +186,10 @@ function validateTerms(type: OrderType, input: OrderInput, now: number): OrderTe
    if (!validDate(firstDueDate)) throw new RuleError('Informe a data do primeiro vencimento do boleto.', 400);
    if (firstDueDate < dayKey(now)) throw new RuleError('O primeiro vencimento do boleto não pode estar no passado.', 400);
   }
-  if (downPayment > 0 && !(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento recebida na loja (Dinheiro, Pix ou Cartão).', 400);
-  return { total, purchase_date: purchaseDate, down_payment: downPayment, down_payment_method: downPayment > 0 ? method : '', installments, first_due_date: firstDueDate, adhesion_amount: 0, adhesion_billing: '', adhesion_payment_method: '', monthly_amount: 0, due_day: 0 };
+  const saleChannel = String(input.saleChannel ?? '');
+  if (!(SALE_CHANNELS as readonly string[]).includes(saleChannel)) throw new RuleError('Informe como o cliente comprou: na loja, pela internet/WhatsApp ou entrega em domicílio (vai para a nota fiscal).', 400);
+  if (downPayment > 0 && !(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento recebida na loja (Dinheiro, Pix, Cartão de crédito ou Cartão de débito).', 400);
+  return { total, purchase_date: purchaseDate, down_payment: downPayment, down_payment_method: downPayment > 0 ? method : '', installments, first_due_date: firstDueDate, sale_channel: saleChannel, adhesion_amount: 0, adhesion_billing: '', adhesion_payment_method: '', monthly_amount: 0, due_day: 0 };
  }
  const adhesion = cents(input.adhesionAmount);
  if (!(adhesion > 0) || adhesion > 100000000) throw new RuleError('Informe o valor da adesão.', 400);
@@ -201,8 +206,8 @@ function validateTerms(type: OrderType, input: OrderInput, now: number): OrderTe
  // Adesão é paga na loja, no ato da assinatura (cláusula 2.1); nunca vira boleto (decisão do usuário).
  if (input.adhesionBilling === 'BOLETO') throw new RuleError('A adesão é paga na loja, no ato da assinatura; ela não gera boleto.', 400);
  const method = String(input.adhesionPaymentMethod ?? '').trim();
- if (!(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento da adesão na loja (Dinheiro, Pix ou Cartão).', 400);
- return { total: 0, purchase_date: '', down_payment: 0, down_payment_method: '', installments: 0, first_due_date: firstDueDate, adhesion_amount: adhesion, adhesion_billing: 'LOJA', adhesion_payment_method: method, monthly_amount: monthly, due_day: dueDay };
+ if (!(STORE_PAYMENT_METHODS as readonly string[]).includes(method)) throw new RuleError('Informe a forma de pagamento da adesão na loja (Dinheiro, Pix, Cartão de crédito ou Cartão de débito).', 400);
+ return { total: 0, purchase_date: '', down_payment: 0, down_payment_method: '', installments: 0, first_due_date: firstDueDate, sale_channel: '', adhesion_amount: adhesion, adhesion_billing: 'LOJA', adhesion_payment_method: method, monthly_amount: monthly, due_day: dueDay };
 }
 
 async function loadUnitForOrder(db: D1Database, tenantId: string, unitId: string) {
@@ -236,12 +241,12 @@ export async function createOrder(db: D1Database, tenantId: string, input: Order
    try {
     await db
      .prepare(
-      `INSERT INTO orders (id, tenant_id, store_id, number, type, status, customer_id, seller_id, seller_name, product_id, unit_id, total, purchase_date, down_payment, down_payment_method, installments, first_due_date,
+      `INSERT INTO orders (id, tenant_id, store_id, number, type, status, customer_id, seller_id, seller_name, product_id, unit_id, total, purchase_date, down_payment, down_payment_method, installments, first_due_date, sale_channel,
         adhesion_amount, adhesion_billing, adhesion_payment_method, monthly_amount, due_day, created_at, updated_at)
-       VALUES (?,?,?,?,?,'OPEN',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,'OPEN',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
      )
      .bind(id, tenantId, store.id, Number(next?.n ?? 1), input.type, customer.id, actor.userId, actor.displayName, unit.productId, unit.id,
-      terms.total, terms.purchase_date, terms.down_payment, terms.down_payment_method, terms.installments, terms.first_due_date,
+      terms.total, terms.purchase_date, terms.down_payment, terms.down_payment_method, terms.installments, terms.first_due_date, terms.sale_channel,
       terms.adhesion_amount, terms.adhesion_billing, terms.adhesion_payment_method, terms.monthly_amount, terms.due_day, now, now)
      .run();
     break;
@@ -261,7 +266,7 @@ type OrderRow = { id: string; store_id: string; type: OrderType; status: string;
 
 async function loadOrder(db: D1Database, tenantId: string, id: string): Promise<OrderRow> {
  const row = await db
-  .prepare('SELECT id, store_id, type, status, customer_id, unit_id, product_id, total, purchase_date, down_payment, down_payment_method, installments, first_due_date, adhesion_amount, adhesion_billing, adhesion_payment_method, monthly_amount, due_day FROM orders WHERE id = ? AND tenant_id = ?')
+  .prepare('SELECT id, store_id, type, status, customer_id, unit_id, product_id, total, purchase_date, down_payment, down_payment_method, installments, first_due_date, sale_channel, adhesion_amount, adhesion_billing, adhesion_payment_method, monthly_amount, due_day FROM orders WHERE id = ? AND tenant_id = ?')
   .bind(id, tenantId)
   .first<OrderRow>();
  if (!row) throw new RuleError('Pedido não encontrado.', 404);
@@ -292,10 +297,10 @@ export async function updateOrder(db: D1Database, tenantId: string, id: string, 
  }
  const result = await db
   .prepare(
-   `UPDATE orders SET customer_id = ?, unit_id = ?, product_id = ?, total = ?, purchase_date = ?, down_payment = ?, down_payment_method = ?, installments = ?, first_due_date = ?,
+   `UPDATE orders SET customer_id = ?, unit_id = ?, product_id = ?, total = ?, purchase_date = ?, down_payment = ?, down_payment_method = ?, installments = ?, first_due_date = ?, sale_channel = ?,
      adhesion_amount = ?, adhesion_billing = ?, adhesion_payment_method = ?, monthly_amount = ?, due_day = ?, updated_at = ? WHERE id = ? AND status = 'OPEN'`,
   )
-  .bind(customer.id, unitId, productId, terms.total, terms.purchase_date, terms.down_payment, terms.down_payment_method, terms.installments, terms.first_due_date,
+  .bind(customer.id, unitId, productId, terms.total, terms.purchase_date, terms.down_payment, terms.down_payment_method, terms.installments, terms.first_due_date, terms.sale_channel,
    terms.adhesion_amount, terms.adhesion_billing, terms.adhesion_payment_method, terms.monthly_amount, terms.due_day, now, id)
   .run();
  if (result.meta.changes !== 1) throw new RuleError('O pedido mudou de situação enquanto era alterado. Atualize a tela.', 409);
@@ -390,7 +395,7 @@ export async function completeOrder(db: D1Database, tenantId: string, id: string
 export type OrderRecord = {
  id: string; number: number; storeId: string; type: OrderType; status: string; customerId: string; customerName: string; customerDocument: string;
  sellerId: string; sellerName: string; productId: string; productName: string; unitId: string; serial: string; color: string; memory: string; condition: string;
- total: number; purchaseDate: string; downPayment: number; downPaymentMethod: string; installments: number; firstDueDate: string;
+ total: number; purchaseDate: string; downPayment: number; downPaymentMethod: string; installments: number; firstDueDate: string; saleChannel: string;
  adhesionAmount: number; adhesionBilling: string; adhesionPaymentMethod: string; monthlyAmount: number; dueDay: number;
  saleId: string | null; cancelReason: string; createdAt: number; updatedAt: number; completedAt: number | null; cancelledAt: number | null;
  notes: { id: string; author: string; text: string; createdAt: number }[];
@@ -403,7 +408,7 @@ export async function listOrders(db: D1Database, tenantId: string, actor: Actor)
    `SELECT o.id AS id, o.number AS number, o.store_id AS storeId, o.type AS type, o.status AS status, o.customer_id AS customerId, c.name AS customerName, c.document AS customerDocument,
            o.seller_id AS sellerId, o.seller_name AS sellerName, o.product_id AS productId, p.name AS productName, o.unit_id AS unitId, u.serial AS serial, u.color AS color,
            u.memory AS memory, u.condition AS condition, o.total AS total, o.purchase_date AS purchaseDate, o.down_payment AS downPayment, o.down_payment_method AS downPaymentMethod,
-           o.installments AS installments, o.first_due_date AS firstDueDate, o.adhesion_amount AS adhesionAmount, o.adhesion_billing AS adhesionBilling,
+           o.installments AS installments, o.first_due_date AS firstDueDate, o.sale_channel AS saleChannel, o.adhesion_amount AS adhesionAmount, o.adhesion_billing AS adhesionBilling,
            o.adhesion_payment_method AS adhesionPaymentMethod, o.monthly_amount AS monthlyAmount, o.due_day AS dueDay, o.sale_id AS saleId, o.cancel_reason AS cancelReason,
            o.created_at AS createdAt, o.updated_at AS updatedAt, o.completed_at AS completedAt, o.cancelled_at AS cancelledAt
     FROM orders o JOIN customers c ON c.id = o.customer_id JOIN products p ON p.id = o.product_id JOIN product_units u ON u.id = o.unit_id

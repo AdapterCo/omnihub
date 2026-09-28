@@ -27,7 +27,8 @@ export const cashCommandSchema = z.discriminatedUnion('type', [
 ]);
 export type CashCommand = z.infer<typeof cashCommandSchema>;
 
-const paymentMethod = z.enum(['Dinheiro', 'Pix', 'Cartão']);
+// "Cartão" sem o tipo não é aceito em vendas novas: a nota fiscal exige crédito (03) ou débito (04).
+const paymentMethod = z.enum(['Dinheiro', 'Pix', 'Cartão de crédito', 'Cartão de débito']);
 const paymentLine = z.object({ method: paymentMethod, amount: cents.min(1) });
 // Aceita o formato antigo (`payment` único) OU o novo (`payments` — pagamento misto, §13).
 // Nunca os dois ao mesmo tempo; o servidor soma `payments` e confere contra o total.
@@ -106,6 +107,7 @@ export const fiscalCommandSchema = z.discriminatedUnion('type', [
         storeId: identifier,
         series: z.number().int().min(1).default(1),
         crt: z.enum(['1_SIMPLES_NACIONAL', '2_SIMPLES_EXCESSO', '3_REGIME_NORMAL']),
+        natureOfOperation: z.string().trim().min(1).max(60),
     }),
     z.object({
         type: z.literal('fiscal.certificate.upload'),
@@ -143,6 +145,7 @@ export const fiscalCommandSchema = z.discriminatedUnion('type', [
         storeId: identifier,
         series: z.number().int().min(1).default(1),
         crt: z.enum(['1_SIMPLES_NACIONAL', '2_SIMPLES_EXCESSO', '3_REGIME_NORMAL']),
+        natureOfOperation: z.string().trim().min(1).max(60),
         cscId: z.string().min(1).max(20),
         csc: z.string().min(1).max(200),
         qrCodeBaseUrl: z.string().url(),
@@ -201,6 +204,7 @@ const orderTerms = {
     downPaymentMethod: z.string().max(20).optional(),
     installments: z.number().int().min(0).max(60).optional(),
     firstDueDate: z.string().max(10).optional(),
+    saleChannel: z.enum(['PRESENCIAL', 'INTERNET', 'ENTREGA']).optional(),
     adhesionAmount: cents.optional(),
     adhesionBilling: z.enum(['BOLETO', 'LOJA']).optional(),
     adhesionPaymentMethod: z.string().max(20).optional(),

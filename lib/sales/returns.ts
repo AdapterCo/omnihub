@@ -17,7 +17,8 @@ import { buildSaleStockStatements } from '../inventory/service.ts';
 //    NÃO pode ser devolvida aqui — a nota de devolução ainda não existe no sistema.
 // A venda nunca é apagada nem alterada além de returned_total/status (REFUNDED quando tudo voltou).
 
-const REFUND_METHODS = ['Dinheiro', 'Pix', 'Cartão'] as const;
+// "Cartão" continua aceito para estornar vendas antigas, registradas antes do crédito/débito.
+const REFUND_METHODS = ['Dinheiro', 'Pix', 'Cartão de crédito', 'Cartão de débito', 'Cartão'] as const;
 // Documento fiscal que ainda vale (ou pode vir a valer): bloqueia a devolução comercial.
 const INACTIVE_FISCAL_STATUSES = ['REJECTED', 'CANCELLED'];
 

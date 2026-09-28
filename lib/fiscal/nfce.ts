@@ -4,7 +4,8 @@ import { RuleError } from '../errors.ts';
 import { requirePermission } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
 import { encryptPayload, decryptPayload, type EncryptedPayload } from './certificate.ts';
-import { buildNFeXml, type NFeItem, type NFePayment } from './builder.ts';
+import { buildNFeXml, fiscalPaymentCode, type NFeItem, type NFePayment } from './builder.ts';
+import { requireUnit, resolveSaleOperation } from './operation.ts';
 import { validateNFeXmlSchema } from './validator.ts';
 import { generateAccessKey } from './keys.ts';
 import { buildNFCeQrCode } from './qrcode.ts';
@@ -32,6 +33,7 @@ export const nfceConfigInputSchema = z.object({
     cscId: z.string().trim().min(1, 'Informe o identificador do CSC (idToken).').max(20),
     csc: z.string().trim().min(1, 'Informe o CSC (Código de Segurança do Contribuinte).').max(200),
     qrCodeBaseUrl: z.string().trim().url('URL do QR Code inválida.'),
+    natureOfOperation: z.string().trim().min(1, 'Informe a natureza da operação.').max(60, 'Natureza da operação: no máximo 60 caracteres.'),
 }).strict();
 
 export type NFCeConfigInput = z.infer<typeof nfceConfigInputSchema>;
@@ -47,12 +49,12 @@ export async function getNFCeStoreConfig(
 
     const configRow = await db
         .prepare(
-            `SELECT series, crt, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl, certificate_id AS certificateId
+            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl, certificate_id AS certificateId
              FROM fiscal_configurations
              WHERE tenant_id = ? AND store_id = ? AND model = '65'`,
         )
         .bind(tenantId, storeId)
-        .first<{ series: number; crt: CRT; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null; certificateId: string | null }>();
+        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null; certificateId: string | null }>();
 
     let certificate: { fingerprint: string; validTo: number } | null = null;
     // Reaproveita o certificado A1 da loja (o mesmo usado para NF-e) — a assinatura da
@@ -91,7 +93,8 @@ export async function getNFCeStoreConfig(
         environment: 'homologacao',
         model: '65',
         series: configRow?.series ?? 1,
-        crt: configRow?.crt ?? '1_SIMPLES_NACIONAL',
+        crt: configRow?.crt || null,
+        natureOfOperation: configRow?.natOp ?? '',
         cscId: configRow?.cscId ?? null,
         cscConfigured,
         qrCodeBaseUrl: configRow?.qrCodeBaseUrl ?? null,
@@ -127,20 +130,20 @@ export async function saveNFCeStoreConfig(
         await db
             .prepare(
                 `UPDATE fiscal_configurations SET
-                 series = ?, crt = ?, csc_id = ?, csc_encrypted = ?, qrcode_base_url = ?, updated_at = ?
+                 series = ?, crt = ?, nat_op = ?, csc_id = ?, csc_encrypted = ?, qrcode_base_url = ?, updated_at = ?
                  WHERE id = ? AND tenant_id = ?`,
             )
-            .bind(input.series, input.crt, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, existing.id, tenantId)
+            .bind(input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, existing.id, tenantId)
             .run();
     } else {
         const id = randomUUID();
         await db
             .prepare(
                 `INSERT INTO fiscal_configurations (
-                     id, tenant_id, store_id, environment, model, series, crt, csc_id, csc_encrypted, qrcode_base_url, created_at, updated_at
-                 ) VALUES (?, ?, ?, 'homologacao', '65', ?, ?, ?, ?, ?, ?, ?)`,
+                     id, tenant_id, store_id, environment, model, series, crt, nat_op, csc_id, csc_encrypted, qrcode_base_url, created_at, updated_at
+                 ) VALUES (?, ?, ?, 'homologacao', '65', ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .bind(id, tenantId, storeId, input.series, input.crt, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, now)
+            .bind(id, tenantId, storeId, input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, now)
             .run();
     }
 }
@@ -233,11 +236,11 @@ export async function generateNFCeForSale(
 
     const nfceConfig = await db
         .prepare(
-            `SELECT series, crt, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl
+            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl
              FROM fiscal_configurations WHERE tenant_id = ? AND store_id = ? AND model = '65'`,
         )
         .bind(tenantId, sale.storeId)
-        .first<{ series: number; crt: CRT; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null }>();
+        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null }>();
 
     if (!nfceConfig) {
         throw new RuleError('Configure a NFC-e (série, CRT, CSC e URL do QR Code) para esta loja antes de emitir.', 400);
@@ -251,6 +254,12 @@ export async function generateNFCeForSale(
 
     const series = nfceConfig.series;
     const crt = nfceConfig.crt;
+    if (!crt) throw new RuleError('Escolha o regime tributário (CRT) em Configuração NFC-e da loja antes de emitir.', 400);
+    const natOp = String(nfceConfig.natOp ?? '').trim();
+    if (!natOp) throw new RuleError('Informe a natureza da operação em Configuração NFC-e da loja antes de emitir.', 400);
+    const storeNumber = String(store.number ?? '').trim();
+    if (!storeNumber) throw new RuleError('Informe o número do endereço da loja no cadastro (se não houver número, escreva "SN").', 400);
+    const operation = await resolveSaleOperation(db, tenantId, saleId, cleanUf, '65');
     const csc = decryptPayload(JSON.parse(nfceConfig.cscEncrypted) as EncryptedPayload).toString('utf8');
 
     const itemsRows = await db
@@ -289,7 +298,7 @@ export async function generateNFCeForSale(
             ncm: cleanNcm,
             cest: item.cest ? item.cest.replace(/\D/g, '') : undefined,
             cfop: cleanCfop,
-            unit: item.unit || 'UN',
+            unit: requireUnit(item.unit, item.name),
             qty: item.qty,
             unitPrice: item.priceCents,
             totalPrice: item.qty * item.priceCents,
@@ -305,11 +314,16 @@ export async function generateNFCeForSale(
         throw new RuleError('A venda não possui pagamentos registrados; não é possível emitir o documento fiscal.', 400);
     }
     const nfcePayments: NFePayment[] = paymentRows.results.map((p) => ({ method: p.method, amount: p.amountCents }));
+    // Confere o tPag antes de consumir um número da série.
+    nfcePayments.forEach((p) => fiscalPaymentCode(p.method));
 
     // Destinatário na NFC-e é sempre opcional (§20: "identificação do consumidor quando
     // aplicável") — nunca força um CPF/CNPJ ou literal de homologação sobre uma venda que
     // não identificou o consumidor; só preenche <dest> quando a venda já tem documento.
     const cleanRecipientDoc = sale.document ? sale.document.replace(/\D/g, '') : undefined;
+    // Com CPF/CNPJ na venda, o nome também precisa estar na venda (nunca "CONSUMIDOR" inventado).
+    const recipientName = String(sale.customer ?? '').trim();
+    if (cleanRecipientDoc && !recipientName) throw new RuleError('A venda tem CPF/CNPJ mas não tem o nome do cliente. Informe o nome para emitir a NFC-e identificada.', 400);
 
     const number = await getNextFiscalNumber(db, tenantId, sale.storeId, '65', series);
     const emissionDate = new Date(now);
@@ -352,11 +366,13 @@ export async function generateNFCeForSale(
             city: store.city || '',
             municipalityCode: cleanMun,
             address: store.address,
-            number: store.number || 'SN',
+            number: storeNumber,
             district: store.district,
             zip: store.zip,
         },
-        recipient: cleanRecipientDoc ? { document: cleanRecipientDoc, name: sale.customer || 'CONSUMIDOR' } : undefined,
+        recipient: cleanRecipientDoc ? { document: cleanRecipientDoc, name: recipientName } : undefined,
+        natureOfOperation: natOp,
+        presence: operation.presence,
         items: nfceItems,
         payments: nfcePayments,
         qrCode: { url: qrCodeUrl },

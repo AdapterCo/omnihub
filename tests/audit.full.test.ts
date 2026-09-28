@@ -70,10 +70,10 @@ test('AuditLog grava after/before quando aplicável (product.update)', async () 
 test('AuditLog nunca grava segredos em texto plano (passphrase do certificado, CSC da NFC-e)', async () => {
  const db = await fixtureTenant();
  const storeId = await createStore(db, 't1', { name: 'Loja Centro', legalName: 'LOJA CENTRO LTDA', cnpj: '12345678000190', ie: '123456789110', uf: 'SP', city: 'São Paulo', municipalityCode: '3550308', address: 'Av Paulista', number: '1000', district: 'Bela Vista', zip: '01310100' }, owner);
- await dispatchCommand(db, 't1', owner, plan, { type: 'fiscal.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL' });
+ await dispatchCommand(db, 't1', owner, plan, { type: 'fiscal.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria' });
  const { pfxBuffer } = generateTestPfx('senha-secreta-123');
  await dispatchCommand(db, 't1', owner, plan, { type: 'fiscal.certificate.upload', storeId, pfxBase64: pfxBuffer.toString('base64'), passphrase: 'senha-secreta-123' });
- await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', cscId: '000001', csc: 'CSC-SUPER-SECRETO', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' });
+ await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'CSC-SUPER-SECRETO', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' });
 
  const rows = await db.prepare("SELECT before_data AS beforeData, after_data AS afterData FROM audit_logs WHERE tenant_id = 't1'").bind().all<{ beforeData: string | null; afterData: string | null }>();
  const allJson = rows.results.map((r) => `${r.beforeData ?? ''}${r.afterData ?? ''}`).join('\n');

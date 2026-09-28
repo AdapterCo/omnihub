@@ -26,7 +26,7 @@ async function fixture() {
  const saleId1 = await createSale(db, 't1', { storeId, items: [{ productId, qty: 2 }], customer: '', document: '', payment: 'Dinheiro' }, op);
  const saleId2 = await createSale(db, 't1', { storeId, items: [{ productId, qty: 1 }], customer: '', document: '', payment: 'Pix' }, op);
  await cancelSale(db, 't1', saleId2, owner);
- const saleId3 = await createSale(db, 't1', { storeId, items: [{ productId, qty: 3 }], customer: '', document: '', payment: 'Cartão' }, op);
+ const saleId3 = await createSale(db, 't1', { storeId, items: [{ productId, qty: 3 }], customer: '', document: '', payment: 'Cartão de crédito' }, op);
  return { db, storeId, productId, sessionId, op };
 }
 
@@ -39,7 +39,7 @@ test('getSalesReport soma apenas vendas COMPLETED, exclui canceladas dos totais 
  assert.equal(report.totals.cancelledCount, 1);
  assert.ok(report.periods.length >= 1);
  const paymentMethods = report.payments.map((p) => p.method).sort();
- assert.deepEqual(paymentMethods, ['Cartão', 'Dinheiro']);
+ assert.deepEqual(paymentMethods, ['Cartão de crédito', 'Dinheiro']);
 });
 
 test('getSalesReport filtra por storeId', async () => {

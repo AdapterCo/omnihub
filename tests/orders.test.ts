@@ -113,16 +113,17 @@ test('pedido de venda (moto): reserva a unidade, valida condições, finaliza na
     const f = await fixture();
     const unit = await registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.moto, serial: 'CHASSI-100', color: 'Vermelha' }, f.owner, NOW);
     const base = { storeId: f.motoStore, type: 'VENDA' as const, customerId: f.customerId, unitId: unit };
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 0, downPayment: 500000, downPaymentMethod: 'Pix' }, f.seller, NOW), /valor total/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix' }, f.seller, NOW), /primeiro vencimento/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', firstDueDate: '2026-09-01' }, f.seller, NOW), /passado/);
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Cheque', firstDueDate: '2026-10-26' }, f.seller, NOW), /Dinheiro, Pix ou Cartão/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 0, downPayment: 500000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL' }, f.seller, NOW), /valor total/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL' }, f.seller, NOW), /primeiro vencimento/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL', firstDueDate: '2026-09-01' }, f.seller, NOW), /passado/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Cheque', saleChannel: 'PRESENCIAL', firstDueDate: '2026-10-26' }, f.seller, NOW), /Cartão de crédito ou Cartão de débito/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 0, downPayment: 1000000, downPaymentMethod: 'Pix', saleChannel: '' }, f.seller, NOW), /como o cliente comprou/);
     await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, type: 'LOCACAO', adhesionAmount: 1, monthlyAmount: 1, firstDueDate: '2026-10-05', adhesionBilling: 'LOJA', adhesionPaymentMethod: 'Dinheiro' }, f.seller, NOW), /modalidade de locação/);
 
-    const orderId = await createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', firstDueDate: '2026-10-26' }, f.seller, NOW);
+    const orderId = await createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 10, downPayment: 200000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL', firstDueDate: '2026-10-26' }, f.seller, NOW);
     assert.deepEqual(await f.unitStatus(unit), { status: 'RESERVED', orderId });
     // A mesma unidade não entra em outro pedido.
-    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 0, downPayment: 1000000, downPaymentMethod: 'Dinheiro' }, f.owner, NOW), /já está reservada/);
+    await assert.rejects(() => createOrder(f.db, f.tenantId, { ...base, total: 1000000, installments: 0, downPayment: 1000000, downPaymentMethod: 'Dinheiro', saleChannel: 'PRESENCIAL' }, f.owner, NOW), /já está reservada/);
     await addOrderNote(f.db, f.tenantId, orderId, 'Cliente vem buscar sábado.', f.seller, NOW);
     let [order] = await listOrders(f.db, f.tenantId, f.seller);
     assert.equal(order.number, 1);
@@ -189,7 +190,7 @@ test('pedido: edição troca unidade liberando a anterior, cancelamento exige mo
     const f = await fixture();
     const u1 = await registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.moto, serial: 'CH-1', color: 'Preta' }, f.owner, NOW);
     const u2 = await registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.moto, serial: 'CH-2', color: 'Branca' }, f.owner, NOW);
-    const terms = { total: 900000, installments: 0, downPayment: 900000, downPaymentMethod: 'Cartão' };
+    const terms = { total: 900000, installments: 0, downPayment: 900000, downPaymentMethod: 'Cartão de crédito', saleChannel: 'PRESENCIAL' };
     const orderId = await createOrder(f.db, f.tenantId, { storeId: f.motoStore, type: 'VENDA', customerId: f.customerId, unitId: u1, ...terms }, f.seller, NOW);
     await updateOrder(f.db, f.tenantId, orderId, { customerId: f.customerId, unitId: u2, ...terms, total: 850000, downPayment: 850000 }, f.seller, NOW);
     assert.deepEqual(await f.unitStatus(u1), { status: 'AVAILABLE', orderId: null });
@@ -210,7 +211,7 @@ test('pedido: edição troca unidade liberando a anterior, cancelamento exige mo
 test('comandos order.* pela API: criação, observação, finalização e auditoria', async () => {
     const f = await fixture();
     const unit = await dispatchCommand(f.db, f.tenantId, f.owner, plan, { type: 'unit.register', storeId: f.motoStore, productId: f.moto, serial: 'CMD-1', color: 'Cinza' }, NOW);
-    const orderId = await dispatchCommand(f.db, f.tenantId, f.seller, plan, { type: 'order.create', storeId: f.motoStore, orderType: 'VENDA', customerId: f.customerId, unitId: unit as string, total: 500000, installments: 0, downPayment: 500000, downPaymentMethod: 'Dinheiro' }, NOW);
+    const orderId = await dispatchCommand(f.db, f.tenantId, f.seller, plan, { type: 'order.create', storeId: f.motoStore, orderType: 'VENDA', customerId: f.customerId, unitId: unit as string, total: 500000, installments: 0, downPayment: 500000, downPaymentMethod: 'Dinheiro', saleChannel: 'PRESENCIAL' }, NOW);
     await dispatchCommand(f.db, f.tenantId, f.seller, plan, { type: 'order.note', id: orderId as string, text: 'Retirada amanhã' }, NOW);
     await openSession(f.db, f.tenantId, f.motoStore, 0, f.seller, NOW);
     await dispatchCommand(f.db, f.tenantId, f.seller, plan, { type: 'order.complete', id: orderId as string }, NOW);

@@ -131,7 +131,7 @@ async function fixture(options: { configure?: boolean } = {}) {
     let serial = 0;
     const newContract = async () => {
         const unit = await registerUnit(db, tenantId, { storeId: store, productId: moto, serial: `CH-${++serial}`, color: 'Preta' }, owner, NOW);
-        const orderId = await createOrder(db, tenantId, { storeId: store, type: 'VENDA', customerId, unitId: unit, total: 900000, purchaseDate: '2026-09-26', installments: 0, downPayment: 900000, downPaymentMethod: 'Pix' }, seller, NOW);
+        const orderId = await createOrder(db, tenantId, { storeId: store, type: 'VENDA', customerId, unitId: unit, total: 900000, purchaseDate: '2026-09-26', installments: 0, downPayment: 900000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL' }, seller, NOW);
         const c = await generateContract(db, storage, tenantId, orderId, seller, NOW);
         return { orderId, unit, contractId: c.contractId, externalRef: c.externalRef };
     };
@@ -230,7 +230,7 @@ test('instabilidade: fica SENDING (pedido travado) e a retentativa usa o mesmo e
     f.mock.failNext('network');
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /repetido automaticamente/);
     assert.equal((await f.contract(c.contractId)).status, 'SENDING');
-    await assert.rejects(() => updateOrder(f.db, f.tenantId, c.orderId, { customerId: f.customerId, unitId: c.unit, total: 800000, purchaseDate: '2026-09-26', installments: 0, downPayment: 800000, downPaymentMethod: 'Pix' }, f.seller, NOW), /contrato enviado/);
+    await assert.rejects(() => updateOrder(f.db, f.tenantId, c.orderId, { customerId: f.customerId, unitId: c.unit, total: 800000, purchaseDate: '2026-09-26', installments: 0, downPayment: 800000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL' }, f.seller, NOW), /contrato enviado/);
     f.mock.failNext({ status: 503, code: 'INTERNAL' });
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /Instabilidade/);
     // Worker retoma com o vendedor original (sem actor).
@@ -303,7 +303,7 @@ test('cancelamento e expiração liberam o pedido e permitem nova revisão com o
     assert.equal((await f.contract(r2.contractId)).status, 'EXPIRED');
     await assert.rejects(() => newSigningLink(f.db, f.tenantId, r2.contractId, f.seller, f.deps), /aguarda a assinatura/);
     // Expirado não trava mais: o pedido pode ser corrigido e ganhar outra revisão.
-    await updateOrder(f.db, f.tenantId, c.orderId, { customerId: f.customerId, unitId: c.unit, total: 850000, purchaseDate: '2026-09-26', installments: 0, downPayment: 850000, downPaymentMethod: 'Pix' }, f.seller, NOW);
+    await updateOrder(f.db, f.tenantId, c.orderId, { customerId: f.customerId, unitId: c.unit, total: 850000, purchaseDate: '2026-09-26', installments: 0, downPayment: 850000, downPaymentMethod: 'Pix', saleChannel: 'PRESENCIAL' }, f.seller, NOW);
     const r3 = await generateContract(f.db, f.storage, f.tenantId, c.orderId, f.seller, NOW);
     assert.match(r3.externalRef, /-r3$/);
 });

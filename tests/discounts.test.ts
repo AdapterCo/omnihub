@@ -238,7 +238,7 @@ test('NF-e com desconto: vDesc por item, vDesc e vNF corretos no total, e o vali
   { code: 'A', description: 'Camiseta', ncm: '61091000', cfop: '5102', unit: 'UN', qty: 2, unitPrice: 5000, totalPrice: 10000, discount: 1000, origin: '0', taxCode: '102' },
   { code: 'B', description: 'Boné', ncm: '65050090', cfop: '5102', unit: 'UN', qty: 1, unitPrice: 3333, totalPrice: 3333, discount: 0, origin: '0', taxCode: '102' },
  ];
- const { xml } = buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(Date.UTC(2026, 0, 16, 15, 0, 0)), issuer: ISSUER, items, payments: [{ method: 'Pix', amount: 12333 }], numericCode: '12345678' });
+ const { xml } = buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(Date.UTC(2026, 0, 16, 15, 0, 0)), issuer: ISSUER, natureOfOperation: 'Venda de mercadoria', presence: '1', items, payments: [{ method: 'Pix', amount: 12333 }], numericCode: '12345678' });
  assert.ok(xml.includes('<vDesc>10.00</vDesc>'), 'vDesc do item e do total');
  assert.equal((xml.match(/<vDesc>/g) ?? []).length, 2, 'um vDesc no item com desconto + o do total');
  assert.ok(xml.includes('<vNF>123.33</vNF>'));
@@ -246,14 +246,14 @@ test('NF-e com desconto: vDesc por item, vDesc e vNF corretos no total, e o vali
  const validation = validateNFeXmlSchema(xml);
  assert.equal(validation.valid, true, validation.errors.map((e) => e.message).join('; '));
  // pagamento que não fecha com o líquido bloqueia a montagem
- assert.throws(() => buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(), issuer: ISSUER, items, payments: [{ method: 'Pix', amount: 13333 }] }), /não confere/);
+ assert.throws(() => buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(), issuer: ISSUER, natureOfOperation: 'Venda de mercadoria', presence: '1', items, payments: [{ method: 'Pix', amount: 13333 }] }), /não confere/);
  // desconto maior que o item bloqueia
- assert.throws(() => buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(), issuer: ISSUER, items: [{ ...items[0], discount: 20000 }], payments: [{ method: 'Pix', amount: 1 }] }), /desconto inválido/);
+ assert.throws(() => buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(), issuer: ISSUER, natureOfOperation: 'Venda de mercadoria', presence: '1', items: [{ ...items[0], discount: 20000 }], payments: [{ method: 'Pix', amount: 1 }] }), /desconto inválido/);
 });
 
 test('validador de schema recusa vNF que ignora o desconto (nota adulterada)', () => {
  const items = [{ code: 'A', description: 'Camiseta', ncm: '61091000', cfop: '5102', unit: 'UN', qty: 2, unitPrice: 5000, totalPrice: 10000, discount: 1000, origin: '0', taxCode: '102' }];
- const { xml } = buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(Date.UTC(2026, 0, 16, 15, 0, 0)), issuer: ISSUER, items, payments: [{ method: 'Pix', amount: 9000 }], numericCode: '12345678' });
+ const { xml } = buildNFeXml({ environment: 'homologacao', series: 1, number: 1, emissionDate: new Date(Date.UTC(2026, 0, 16, 15, 0, 0)), issuer: ISSUER, natureOfOperation: 'Venda de mercadoria', presence: '1', items, payments: [{ method: 'Pix', amount: 9000 }], numericCode: '12345678' });
  const tampered = xml.replace('<vNF>90.00</vNF>', '<vNF>100.00</vNF>');
  const result = validateNFeXmlSchema(tampered);
  assert.equal(result.valid, false);

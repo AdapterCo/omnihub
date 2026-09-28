@@ -75,12 +75,12 @@ test('FiscalStoreConfig: salvar e consultar parâmetros de emissão da loja', as
 
     // Operador de caixa sem permissão FISCAL_CONFIG é bloqueado
     await assert.rejects(
-        () => saveFiscalStoreConfig(db, 't1', storeId, { series: 2, crt: '3_REGIME_NORMAL' }, operator),
+        () => saveFiscalStoreConfig(db, 't1', storeId, { series: 2, crt: '3_REGIME_NORMAL', natureOfOperation: 'Venda de mercadoria' }, operator),
         /Você não tem permissão/
     );
 
     // Salvar configuração com OWNER
-    await saveFiscalStoreConfig(db, 't1', storeId, { series: 2, crt: '3_REGIME_NORMAL' }, owner);
+    await saveFiscalStoreConfig(db, 't1', storeId, { series: 2, crt: '3_REGIME_NORMAL', natureOfOperation: 'Venda de mercadoria' }, owner);
 
     const savedConfig = await getFiscalStoreConfig(db, 't1', storeId, owner);
     assert.equal(savedConfig.series, 2);
@@ -195,6 +195,7 @@ test('dispatchCommand: integração completa dos comandos fiscais com idempotên
         storeId,
         series: 10,
         crt: '1_SIMPLES_NACIONAL',
+        natureOfOperation: 'Venda de mercadoria',
     });
 
     const cfg = await getFiscalStoreConfig(db, 't1', storeId, owner);

@@ -40,7 +40,7 @@ async function fixture(type:'VENDA'|'LOCACAO'='VENDA') {
  const product=await createProduct(db,tenant,{name:'Produto MOCK',sku:'MOCK',price:10000,cost:1,minimum:0,unit:'UN',kind:type==='VENDA'?'MOTO':'LOCACAO'} as never,actor);
  const customer=await createCustomer(db,tenant,{name:'Pessoa MOCK',docType:'CPF',document:'52998224725'},actor);
  const unit=await registerUnit(db,tenant,{storeId:store,productId:product,serial:type==='VENDA'?'MOCK-123':'123456789012345',color:'Preto',memory:'128',condition:'Novo'},actor,now);
- const id=await createOrder(db,tenant,{storeId:store,type,customerId:customer,unitId:unit,total:10001,purchaseDate:'2026-09-26',downPayment:0,installments:3,firstDueDate:type==='VENDA'?'2026-10-31':'2026-10-10',adhesionAmount:1000,adhesionBilling:'LOJA',adhesionPaymentMethod:'Dinheiro',monthlyAmount:9000,dueDay:10},actor,now);
+ const id=await createOrder(db,tenant,{storeId:store,type,customerId:customer,unitId:unit,total:10001,purchaseDate:'2026-09-26',downPayment:0,saleChannel:'PRESENCIAL',installments:3,firstDueDate:type==='VENDA'?'2026-10-31':'2026-10-10',adhesionAmount:1000,adhesionBilling:'LOJA',adhesionPaymentMethod:'Dinheiro',monthlyAmount:9000,dueDay:10},actor,now);
  await openSession(db,tenant,store,0,actor,now);
  await completeOrder(db,tenant,id,actor,now);
  await saveBillingConfig(db,tenant,store,{environment:'SANDBOX',apiKey:'MOCK-asaas-token',webhookSecret:'MOCK-webhook-secret-at-least-32-characters',notificationsEnabled:false},actor,now);

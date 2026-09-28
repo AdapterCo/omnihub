@@ -162,7 +162,7 @@ test('cliente: valores em string com 2 casas, leitura de centavos e mapa de stat
     assert.equal(amountToCents('24.00'), 2400);
     assert.equal(amountToCents(24.5), 2450);
     assert.equal(amountToCents(''), null);
-    const m = (status: string) => mapOrderStatus({ id: 'x', status, statusDetail: '', totalAmountCents: 1, qrData: null, externalReference: '' });
+    const m = (status: string) => mapOrderStatus({ id: 'x', status, statusDetail: '', totalAmountCents: 1, qrData: null, externalReference: '', cardType: null });
     assert.deepEqual(['created', 'at_terminal', 'processed', 'action_required', 'failed', 'canceled', 'expired', 'refunded', 'desconhecido'].map(m), ['PENDING', 'PENDING', 'PAID', 'ACTION_REQUIRED', 'FAILED', 'CANCELLED', 'EXPIRED', 'REFUNDED', 'ACTION_REQUIRED']);
 });
 
@@ -321,6 +321,19 @@ test('cancelar cobrança: cancela no provedor e devolve o estoque; na maquininha
     f.mp.set((await f.chargeRow(point.id))?.orderId as string, 'at_terminal');
     await assert.rejects(() => cancelCharge(f.db, f.tenantId, point.id, f.operator, Date.now(), f.deps), /cancele pelo próprio terminal/);
     assert.equal((await f.sale(point.saleId))?.status, 'PENDING_PAYMENT');
+});
+
+test('maquininha: crédito/débito informado pela transação vai para o pagamento da venda; sem a informação fica "Cartão"', async () => {
+    const f = await fixture();
+    const methods = async (saleId: string) => ((await f.db.prepare('SELECT method FROM sale_payments WHERE sale_id = ?').bind(saleId).all<{ method: string }>()).results ?? []).map((r) => r.method);
+    const debit = await f.start('CARD_TERMINAL');
+    f.mp.set((await f.chargeRow(debit.id))?.orderId as string, 'processed', { transactions: { payments: [{ payment_method: { id: 'master', type: 'debit_card' } }] } } as never);
+    assert.equal((await refreshCharge(f.db, f.tenantId, debit.id, f.operator, Date.now() + 5000, f.deps)).status, 'PAID');
+    assert.deepEqual(await methods(debit.saleId), ['Cartão de débito']);
+    const unknown = await f.start('CARD_TERMINAL');
+    f.mp.set((await f.chargeRow(unknown.id))?.orderId as string, 'processed');
+    assert.equal((await refreshCharge(f.db, f.tenantId, unknown.id, f.operator, Date.now() + 5000, f.deps)).status, 'PAID');
+    assert.deepEqual(await methods(unknown.saleId), ['Cartão'], 'sem o tipo do provedor, nada é presumido (a nota bloqueia e explica)');
 });
 
 test('maquininha: "verificar no terminal" só é resolvido por quem tem PAYMENT_RESOLVE, com justificativa', async () => {
