@@ -9,6 +9,8 @@ import { createSale } from '../lib/sales/service.ts';
 import { saveFiscalStoreConfig, generateNFeForSale, getFiscalStoreConfig } from '../lib/fiscal/service.ts';
 import { buildNFeXml, fiscalPaymentCode } from '../lib/fiscal/builder.ts';
 import { resolveSaleOperation } from '../lib/fiscal/operation.ts';
+import { buildNFCeQrCode } from '../lib/fiscal/qrcode.ts';
+import { validateNFeXmlSchema } from '../lib/fiscal/validator.ts';
 
 const owner = { userId: 'owner-1', displayName: 'Titular', role: 'ADMIN', storeId: null, permissions: permissionsForRole('OWNER') };
 const operator = { userId: 'op-1', displayName: 'Operador', role: 'OPERADOR_CAIXA', storeId: null, permissions: permissionsForRole('OPERADOR_CAIXA') };
@@ -110,4 +112,24 @@ test('configuração fiscal: sem regime presumido — loja sem configuração n�
     assert.equal(saved.crt, '1_SIMPLES_NACIONAL');
     assert.equal(saved.natureOfOperation, 'Venda de mercadoria');
     await assert.rejects(async () => saveFiscalStoreConfig(f.db, 't1', other, { series: 1, crt: '1_SIMPLES_NACIONAL' }, owner));
+});
+
+// Achados do validador oficial da SVRS (2026-09-28), com XMLs fictícios gerados por
+// scripts/homologacao/gerar-exemplos.ts.
+test('NFC-e: idDest, urlChave obrigatório, texto de homologação no 1º item e QR Code versão 2 sem CPF', () => {
+    const KEY = '35260911222333000181650010000000011196897496';
+    const qr = buildNFCeQrCode({ environment: 'homologacao', qrCodeBaseUrl: 'https://exemplo.test/qrcode', accessKey: KEY, cscId: '000001', csc: 'CSC-MOCK' });
+    const [chave, versao, tpAmb, idCsc, hash, ...extra] = qr.url.split('?p=')[1].split('|');
+    assert.deepEqual([chave, versao, tpAmb, idCsc, extra.length], [KEY, '2', '2', '1', 0], 'idCSC sem zeros à esquerda e sem CPF');
+    assert.match(hash, /^[0-9A-F]{40}$/);
+    assert.throws(() => buildNFCeQrCode({ environment: 'homologacao', qrCodeBaseUrl: 'https://exemplo.test/qrcode', accessKey: KEY, cscId: 'ABC', csc: 'x' }), /numérico/);
+    const nfce = (consultaUrl?: string) => buildNFeXml(base({ model: '65', numericCode: '19689749', recipient: undefined, qrCode: { url: qr.url, consultaUrl } }) as never);
+    assert.throws(() => nfce(), /urlChave/);
+    const { xml } = nfce('https://exemplo.test/consulta');
+    assert.match(xml, /<idDest>1<\/idDest>/);
+    assert.match(xml, /<urlChave>https:\/\/exemplo\.test\/consulta<\/urlChave><\/infNFeSupl>/);
+    assert.match(xml, /<xProd>NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL<\/xProd>/);
+    assert.equal(validateNFeXmlSchema(xml, '65').valid, true);
+    const nfe = buildNFeXml(base() as never).xml;
+    assert.match(nfe, /<xProd>Produto<\/xProd>/, 'na NF-e a descrição do item não muda');
 });

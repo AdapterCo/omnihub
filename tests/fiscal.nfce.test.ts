@@ -61,7 +61,7 @@ async function fixture(withNfceConfig = true) {
  const { pfxBuffer } = generateTestPfx('senha123');
  await uploadCertificate(db, 't1', storeId, pfxBuffer, 'senha123', owner);
  if (withNfceConfig) {
-  await saveNFCeStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'CSC-SECRETO-DE-TESTE', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' }, owner);
+  await saveNFCeStoreConfig(db, 't1', storeId, { series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'CSC-SECRETO-DE-TESTE', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode', consultaUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/consulta' }, owner);
  }
  const productId = await createProduct(db, 't1', { name: 'Refrigerante 350ml', sku: 'REFRI-350', price: 500, cost: 250, minimum: 5, unit: 'UN', ncm: '22021000', cfop: '5102', origin: '0', taxCode: '102' }, owner);
  await receiveStock(db, { tenantId: 't1', storeId, productId, quantity: 50, userId: owner.userId, reason: 'Estoque inicial' }, owner);
@@ -96,13 +96,13 @@ test('generateNFCeForSale bloqueia sem configuração de NFC-e (CSC/QR Code) sal
  await assert.rejects(() => generateNFCeForSale(db, 't1', saleId, owner), /Configure a NFC-e/);
 });
 
-test('generateNFCeForSale: gera XML modelo 65 com QR Code, sem idDest, valida schema e grava GENERATED', async () => {
+test('generateNFCeForSale: gera XML modelo 65 com QR Code e idDest, valida schema e grava GENERATED', async () => {
  const { db, saleId } = await fixture();
  const doc = await generateNFCeForSale(db, 't1', saleId, owner);
  assert.equal(doc.status, 'GENERATED');
  assert.equal(doc.model, '65');
  assert.ok(doc.rawXml?.includes('<mod>65</mod>'));
- assert.ok(!doc.rawXml?.includes('<idDest>'));
+ assert.ok(doc.rawXml?.includes('<idDest>1</idDest>'), 'idDest é obrigatório também na NFC-e');
  assert.ok(doc.rawXml?.includes('<qrCode>'));
  assert.ok(doc.rawXml?.includes('<infNFeSupl>'));
 });
@@ -163,10 +163,10 @@ test('dispatchCommand: nfce.config.save e nfce.generate estão ligados e barram 
  const { db, storeId, saleId, op } = await fixture(false);
  const plan = { status: 'active', accessUntil: Date.now() + 100000, maxStores: 3 };
  await assert.rejects(
-  () => dispatchCommand(db, 't1', op, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'segredo', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' }),
+  () => dispatchCommand(db, 't1', op, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'segredo', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode', consultaUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/consulta' }),
   /não tem permissão/,
  );
- await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'segredo', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' });
+ await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'segredo', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode', consultaUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/consulta' });
  await assert.rejects(
   () => dispatchCommand(db, 't1', op, plan, { type: 'nfce.generate', saleId }),
   /não tem permissão/,

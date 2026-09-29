@@ -149,6 +149,7 @@ export const fiscalCommandSchema = z.discriminatedUnion('type', [
         cscId: z.string().min(1).max(20),
         csc: z.string().min(1).max(200),
         qrCodeBaseUrl: z.string().url(),
+        consultaUrl: z.string().url(),
     }),
     z.object({
         type: z.literal('nfce.generate'),

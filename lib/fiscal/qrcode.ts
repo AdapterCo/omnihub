@@ -18,7 +18,6 @@ export type BuildNFCeQrCodeInput = {
     accessKey: string;
     cscId: string;
     csc: string;
-    recipientDocument?: string; // cDest, quando o consumidor foi identificado
 };
 
 export function buildNFCeQrCode(input: BuildNFCeQrCodeInput): { url: string; params: string } {
@@ -29,20 +28,25 @@ export function buildNFCeQrCode(input: BuildNFCeQrCodeInput): { url: string; par
     if (!/^\d{44}$/.test(input.accessKey)) {
         throw new RuleError('Chave de acesso inválida para geração do QR Code.', 400);
     }
-    const cscId = (input.cscId || '').trim();
-    if (!cscId) {
+    const rawCscId = (input.cscId || '').trim();
+    if (!rawCscId) {
         throw new RuleError('Identificador do CSC (idToken) não configurado para esta loja.', 400);
     }
+    if (!/^\d{1,6}$/.test(rawCscId)) {
+        throw new RuleError('Identificador do CSC deve ser numérico (até 6 dígitos), como informado pela SEFAZ.', 400);
+    }
+    // O schema oficial só aceita o identificador sem zeros à esquerda ("000001" -> "1"); o valor
+    // é o mesmo, só muda a escrita (rejeitado com cStat 225 no validador da SVRS em 2026-09-28).
+    const cscId = String(Number(rawCscId));
     if (!input.csc) {
         throw new RuleError('CSC (Código de Segurança do Contribuinte) não configurado para esta loja.', 400);
     }
 
     const tpAmb = input.environment === 'producao' ? '1' : '2';
-    const cDest = input.recipientDocument ? input.recipientDocument.replace(/\D/g, '') : '';
-
-    // Parâmetros na ordem oficial da NT 2015.002: chave|versão|tpAmb|idCSC (+ cDest quando
-    // o consumidor foi identificado), seguidos pelo hash SHA-1 hexadecimal.
-    const params = `${input.accessKey}|2|${tpAmb}|${cscId}${cDest ? `|${cDest}` : ''}`;
+    // Versão 2 do QR Code (emissão normal): chave|2|tpAmb|idCSC, seguidos do hash SHA-1
+    // hexadecimal. O CPF/CNPJ do consumidor NÃO entra no QR Code da versão 2 (o schema oficial
+    // rejeitou a URL com o CPF); a identificação fica só no grupo <dest> do XML.
+    const params = `${input.accessKey}|2|${tpAmb}|${cscId}`;
     const hash = createHash('sha1').update(params + input.csc, 'utf8').digest('hex').toUpperCase();
     const url = `${baseUrl}?p=${params}|${hash}`;
 

@@ -33,6 +33,7 @@ export const nfceConfigInputSchema = z.object({
     cscId: z.string().trim().min(1, 'Informe o identificador do CSC (idToken).').max(20),
     csc: z.string().trim().min(1, 'Informe o CSC (Código de Segurança do Contribuinte).').max(200),
     qrCodeBaseUrl: z.string().trim().url('URL do QR Code inválida.'),
+    consultaUrl: z.string().trim().url('URL de consulta pela chave inválida.'),
     natureOfOperation: z.string().trim().min(1, 'Informe a natureza da operação.').max(60, 'Natureza da operação: no máximo 60 caracteres.'),
 }).strict();
 
@@ -49,12 +50,12 @@ export async function getNFCeStoreConfig(
 
     const configRow = await db
         .prepare(
-            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl, certificate_id AS certificateId
+            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl, consulta_url AS consultaUrl, certificate_id AS certificateId
              FROM fiscal_configurations
              WHERE tenant_id = ? AND store_id = ? AND model = '65'`,
         )
         .bind(tenantId, storeId)
-        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null; certificateId: string | null }>();
+        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null; consultaUrl: string | null; certificateId: string | null }>();
 
     let certificate: { fingerprint: string; validTo: number } | null = null;
     // Reaproveita o certificado A1 da loja (o mesmo usado para NF-e) — a assinatura da
@@ -98,6 +99,7 @@ export async function getNFCeStoreConfig(
         cscId: configRow?.cscId ?? null,
         cscConfigured,
         qrCodeBaseUrl: configRow?.qrCodeBaseUrl ?? null,
+        consultaUrl: configRow?.consultaUrl || null,
         certificate,
         status,
     };
@@ -130,20 +132,20 @@ export async function saveNFCeStoreConfig(
         await db
             .prepare(
                 `UPDATE fiscal_configurations SET
-                 series = ?, crt = ?, nat_op = ?, csc_id = ?, csc_encrypted = ?, qrcode_base_url = ?, updated_at = ?
+                 series = ?, crt = ?, nat_op = ?, csc_id = ?, csc_encrypted = ?, qrcode_base_url = ?, consulta_url = ?, updated_at = ?
                  WHERE id = ? AND tenant_id = ?`,
             )
-            .bind(input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, existing.id, tenantId)
+            .bind(input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, input.consultaUrl, now, existing.id, tenantId)
             .run();
     } else {
         const id = randomUUID();
         await db
             .prepare(
                 `INSERT INTO fiscal_configurations (
-                     id, tenant_id, store_id, environment, model, series, crt, nat_op, csc_id, csc_encrypted, qrcode_base_url, created_at, updated_at
-                 ) VALUES (?, ?, ?, 'homologacao', '65', ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     id, tenant_id, store_id, environment, model, series, crt, nat_op, csc_id, csc_encrypted, qrcode_base_url, consulta_url, created_at, updated_at
+                 ) VALUES (?, ?, ?, 'homologacao', '65', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
-            .bind(id, tenantId, storeId, input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, now, now)
+            .bind(id, tenantId, storeId, input.series, input.crt, input.natureOfOperation, input.cscId, JSON.stringify(cscPayload), input.qrCodeBaseUrl, input.consultaUrl, now, now)
             .run();
     }
 }
@@ -236,11 +238,11 @@ export async function generateNFCeForSale(
 
     const nfceConfig = await db
         .prepare(
-            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl
+            `SELECT series, crt, nat_op AS natOp, csc_id AS cscId, csc_encrypted AS cscEncrypted, qrcode_base_url AS qrCodeBaseUrl, consulta_url AS consultaUrl
              FROM fiscal_configurations WHERE tenant_id = ? AND store_id = ? AND model = '65'`,
         )
         .bind(tenantId, sale.storeId)
-        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null }>();
+        .first<{ series: number; crt: CRT; natOp: string | null; cscId: string | null; cscEncrypted: string | null; qrCodeBaseUrl: string | null; consultaUrl: string | null }>();
 
     if (!nfceConfig) {
         throw new RuleError('Configure a NFC-e (série, CRT, CSC e URL do QR Code) para esta loja antes de emitir.', 400);
@@ -250,6 +252,9 @@ export async function generateNFCeForSale(
     }
     if (!nfceConfig.qrCodeBaseUrl) {
         throw new RuleError('URL de consulta do QR Code não configurada para esta loja.', 400);
+    }
+    if (!nfceConfig.consultaUrl) {
+        throw new RuleError('Informe a URL de consulta da NFC-e pela chave em Configuração NFC-e da loja (obtida no credenciamento, própria da UF).', 400);
     }
 
     const series = nfceConfig.series;
@@ -346,7 +351,6 @@ export async function generateNFCeForSale(
         accessKey,
         cscId: nfceConfig.cscId,
         csc,
-        recipientDocument: cleanRecipientDoc,
     });
 
     const { xml } = buildNFeXml({
@@ -375,7 +379,7 @@ export async function generateNFCeForSale(
         presence: operation.presence,
         items: nfceItems,
         payments: nfcePayments,
-        qrCode: { url: qrCodeUrl },
+        qrCode: { url: qrCodeUrl, consultaUrl: nfceConfig.consultaUrl },
     });
 
     const validation = validateNFeXmlSchema(xml, '65');

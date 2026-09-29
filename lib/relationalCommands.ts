@@ -340,8 +340,8 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         return JSON.stringify(result);
     }
     if (command.type === 'nfce.config.save') {
-        await saveNFCeStoreConfig(db, tenantId, command.storeId, { series: command.series, crt: command.crt, cscId: command.cscId, csc: command.csc, qrCodeBaseUrl: command.qrCodeBaseUrl, natureOfOperation: command.natureOfOperation }, actor, now);
-        await audit({ storeId: command.storeId, description: `Configuração de NFC-e salva para a loja ${command.storeId}`, entity: 'nfce_configuration', entityId: command.storeId, after: { series: command.series, crt: command.crt, natureOfOperation: command.natureOfOperation, cscId: command.cscId, qrCodeBaseUrl: command.qrCodeBaseUrl } });
+        await saveNFCeStoreConfig(db, tenantId, command.storeId, { series: command.series, crt: command.crt, cscId: command.cscId, csc: command.csc, qrCodeBaseUrl: command.qrCodeBaseUrl, consultaUrl: command.consultaUrl, natureOfOperation: command.natureOfOperation }, actor, now);
+        await audit({ storeId: command.storeId, description: `Configuração de NFC-e salva para a loja ${command.storeId}`, entity: 'nfce_configuration', entityId: command.storeId, after: { series: command.series, crt: command.crt, natureOfOperation: command.natureOfOperation, cscId: command.cscId, qrCodeBaseUrl: command.qrCodeBaseUrl, consultaUrl: command.consultaUrl } });
         return;
     }
     if (command.type === 'nfce.generate') {

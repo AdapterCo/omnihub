@@ -53,6 +53,7 @@ export type NFCeStoreConfig = {
     cscId: string | null;
     cscConfigured: boolean;
     qrCodeBaseUrl: string | null;
+    consultaUrl: string | null;
     certificate?: { fingerprint: string; validTo: number } | null;
     status: 'NOT_CONFIGURED' | 'CONFIGURED' | 'READY';
 };

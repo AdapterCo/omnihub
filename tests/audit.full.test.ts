@@ -73,7 +73,7 @@ test('AuditLog nunca grava segredos em texto plano (passphrase do certificado, C
  await dispatchCommand(db, 't1', owner, plan, { type: 'fiscal.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria' });
  const { pfxBuffer } = generateTestPfx('senha-secreta-123');
  await dispatchCommand(db, 't1', owner, plan, { type: 'fiscal.certificate.upload', storeId, pfxBase64: pfxBuffer.toString('base64'), passphrase: 'senha-secreta-123' });
- await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'CSC-SUPER-SECRETO', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode' });
+ await dispatchCommand(db, 't1', owner, plan, { type: 'nfce.config.save', storeId, series: 1, crt: '1_SIMPLES_NACIONAL', natureOfOperation: 'Venda de mercadoria', cscId: '000001', csc: 'CSC-SUPER-SECRETO', qrCodeBaseUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/qrcode', consultaUrl: 'https://homologacao.nfce.fazenda.sp.gov.br/consulta' });
 
  const rows = await db.prepare("SELECT before_data AS beforeData, after_data AS afterData FROM audit_logs WHERE tenant_id = 't1'").bind().all<{ beforeData: string | null; afterData: string | null }>();
  const allJson = rows.results.map((r) => `${r.beforeData ?? ''}${r.afterData ?? ''}`).join('\n');

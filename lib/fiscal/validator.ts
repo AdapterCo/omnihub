@@ -120,12 +120,10 @@ export function validateNFeXmlSchema(xml: string, expectedModel: '55' | '65' = '
             errors.push({ path: '/NFe/infNFe/ide/mod', message: `Modelo da nota deve ser "${expectedModel}" (${expectedModel === '65' ? 'NFC-e' : 'NF-e'}). Informado: "${mod || ''}".` });
         }
 
-        // idDest não existe no schema da NFC-e (modelo 65) — só é obrigatório para NF-e.
-        if (expectedModel === '55') {
-            const idDest = extractTag(ideXml, 'idDest');
-            if (!idDest || !['1', '2', '3'].includes(idDest)) {
-                errors.push({ path: '/NFe/infNFe/ide/idDest', message: 'idDest deve ser 1 (interna), 2 (interestadual) ou 3 (exterior).' });
-            }
+        // idDest é obrigatório na NF-e e na NFC-e (schema oficial).
+        const idDest = extractTag(ideXml, 'idDest');
+        if (!idDest || !['1', '2', '3'].includes(idDest)) {
+            errors.push({ path: '/NFe/infNFe/ide/idDest', message: 'idDest deve ser 1 (interna), 2 (interestadual) ou 3 (exterior).' });
         }
 
         const serie = extractTag(ideXml, 'serie');

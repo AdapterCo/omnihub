@@ -179,11 +179,10 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
     xml += `<nNF>${number}</nNF>`;
     xml += `<dhEmi>${dhEmi}</dhEmi>`;
     xml += `<tpNF>1</tpNF>`; // 1 = Saída
-    // idDest (destino da operação) não se aplica à NFC-e (modelo 65): consumo é sempre
-    // interno ao próprio estabelecimento e o grupo não existe no schema deste modelo.
-    if (model === '55') {
-        xml += `<idDest>1</idDest>`; // 1 = Operação interna
-    }
+    // idDest é obrigatório nos dois modelos (o schema oficial rejeitou NFC-e sem ele: cStat 225
+    // no validador da SVRS em 2026-09-28). Só operação interna é emitida: a interestadual é
+    // bloqueada antes (lib/fiscal/operation.ts).
+    xml += `<idDest>1</idDest>`; // 1 = Operação interna
     xml += `<cMunFG>${issuer.municipalityCode.replace(/\D/g, '')}</cMunFG>`;
     xml += `<tpImp>${model === '65' ? '4' : '1'}</tpImp>`; // 1 = Retrato (NF-e) · 4 = DANFE NFC-e
     xml += `<tpEmis>1</tpEmis>`; // 1 = Normal
@@ -271,7 +270,11 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
         xml += `<prod>`;
         xml += `<cProd>${escapeXml(item.code)}</cProd>`;
         xml += `<cEAN>${ean}</cEAN>`;
-        xml += `<xProd>${escapeXml(item.description)}</xProd>`;
+        // NFC-e em homologação: a descrição do 1º item precisa ser este texto (regra 373 da SEFAZ).
+        const xProd = model === '65' && environment === 'homologacao' && index === 0
+            ? 'NOTA FISCAL EMITIDA EM AMBIENTE DE HOMOLOGACAO - SEM VALOR FISCAL'
+            : escapeXml(item.description);
+        xml += `<xProd>${xProd}</xProd>`;
         xml += `<NCM>${cleanNcm}</NCM>`;
         if (item.cest && /^\d{7}$/.test(item.cest.replace(/\D/g, ''))) {
             xml += `<CEST>${item.cest.replace(/\D/g, '')}</CEST>`;
@@ -392,10 +395,12 @@ export function buildNFeXml(input: BuildNFeInput): { xml: string; accessKey: str
             throw new RuleError('NFC-e requer QR Code calculado (CSC) antes da montagem do XML final.', 400);
         }
         xml += `<infNFeSupl>`;
-        xml += `<qrCode><![CDATA[${input.qrCode.url}]]></qrCode>`;
-        if (input.qrCode.consultaUrl) {
-            xml += `<urlChave>${escapeXml(input.qrCode.consultaUrl)}</urlChave>`;
+        // urlChave é obrigatório no schema (a SVRS rejeitou NFC-e sem ele); vem da configuração da loja.
+        if (!String(input.qrCode.consultaUrl ?? '').trim()) {
+            throw new RuleError('Informe a URL de consulta da NFC-e pela chave (urlChave) em Configuração NFC-e da loja.', 400);
         }
+        xml += `<qrCode><![CDATA[${input.qrCode.url}]]></qrCode>`;
+        xml += `<urlChave>${escapeXml(String(input.qrCode.consultaUrl).trim())}</urlChave>`;
         xml += `</infNFeSupl>`;
     }
 
