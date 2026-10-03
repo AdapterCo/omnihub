@@ -29,11 +29,11 @@ export async function POST(request: Request) {
   if (!isSameOrigin(request)) return reply({ error: 'Origem inválida.' }, 403);
   const user = await getCurrentUser();
   if (!user) return reply({ error: 'Entre na sua conta.', signIn: true }, 401);
-  const body = await readJsonLimited<{ action?: unknown; id?: unknown; name?: unknown; priceCents?: unknown; maxStores?: unknown; active?: unknown; value?: unknown }>(request, 4 * 1024);
+  const body = await readJsonLimited<{ action?: unknown; id?: unknown; name?: unknown; priceCents?: unknown; maxStores?: unknown; active?: unknown; value?: unknown; description?: unknown; features?: unknown }>(request, 8 * 1024);
   if (!body) return reply({ error: 'Dados inválidos.' }, 400);
   const db = database();
   if (body.action === 'savePlan') {
-   await savePlatformPlan(db, user.email, { id: typeof body.id === 'string' && body.id ? body.id : undefined, name: body.name, priceCents: body.priceCents, maxStores: body.maxStores, active: body.active });
+   await savePlatformPlan(db, user.email, { id: typeof body.id === 'string' && body.id ? body.id : undefined, name: body.name, priceCents: body.priceCents, maxStores: body.maxStores, active: body.active, description: body.description, features: body.features });
   } else if (body.action === 'adminMaxStores') {
    await setAdminMaxStores(db, user.email, body.value);
   } else {

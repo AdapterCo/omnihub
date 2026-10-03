@@ -9,7 +9,7 @@ import { createStore } from '../lib/catalog/service.ts';
 import { MercadoPagoClient, type FetchLike } from '../lib/payments/mercadopago.ts';
 import {
     addOneMonth, cancelAccountSubscription, getPlatformOverview, listPlatformPlans, reconcileOpenSubscriptions,
-    reconcileSubscription, resolveEntitlement, savePlatformPlan, setAdminMaxStores, startSubscription, type SubscriptionDeps,
+    reconcileSubscription, registerWithPlan, getSignupOptions, resolveEntitlement, savePlatformPlan, setAdminMaxStores, startSubscription, type SubscriptionDeps,
 } from '../lib/subscriptions/service.ts';
 
 const ADMIN = 'admin@plataforma.test';
@@ -246,4 +246,37 @@ test('administrador da plataforma: conta liberada sem pagar, com o limite de loj
 test('um mês depois: fim de mês vira o último dia do mês seguinte', () => {
     assert.equal(new Date(addOneMonth(Date.UTC(2026, 0, 31, 12))).toISOString(), '2026-02-28T12:00:00.000Z');
     assert.equal(new Date(addOneMonth(Date.UTC(2026, 11, 15))).toISOString(), '2027-01-15T00:00:00.000Z');
+});
+
+test('cadastro com plano: confere plano antes de criar a conta, cria a assinatura e devolve o link do checkout', async () => {
+    const f = await fixture();
+    const planId = await savePlatformPlan(f.db, ADMIN, { name: 'Essencial', priceCents: 9900, maxStores: 1, active: true, description: 'Para começar', features: ['PDV', 'Estoque', '', '  '].join('\n') }, ENV, T0);
+    const options = await getSignupOptions(f.db, ENV);
+    assert.deepEqual(options.plans.map((p) => [p.name, p.description, p.features]), [['Essencial', 'Para começar', ['PDV', 'Estoque']]]);
+    const users = async () => Number((await f.db.prepare('SELECT COUNT(*) AS n FROM users').bind().first<{ n: number }>())?.n);
+    const before = await users();
+    const input = { accountName: 'Loja Nova', displayName: 'Ana', email: 'ana@nova.test', password: 'Test-only-password-123' };
+    await assert.rejects(() => registerWithPlan(f.db, input, '203.0.113.9', f.deps, ENV, T0), /Escolha um plano/);
+    await assert.rejects(() => registerWithPlan(f.db, { ...input, planId }, '203.0.113.9', { client: null, appUrl: null }, ENV, T0), /indisponível/);
+    assert.equal(await users(), before, 'nenhuma conta criada quando o plano ou a cobrança não estão ok');
+    const r = await registerWithPlan(f.db, { ...input, planId, payerEmail: 'pagador@nova.test' }, '203.0.113.9', f.deps, ENV, T0);
+    assert.match(r.initPoint!, /subscriptions\/checkout/);
+    assert.equal(r.checkoutError, null);
+    const sent = f.mp.calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    assert.equal(sent.payer_email, 'pagador@nova.test');
+    const acc = await f.db.prepare("SELECT a.subscription_status AS s FROM accounts a JOIN account_subscriptions x ON x.account_id = a.id WHERE x.status = 'PENDING'").bind().first<{ s: string }>();
+    assert.equal(acc?.s, 'none', 'só ativa depois do pagamento confirmado');
+});
+
+test('cadastro: administrador da plataforma não escolhe plano; falha no checkout deixa a conta para ativação', async () => {
+    const f = await fixture();
+    const admin = await registerWithPlan(f.db, { accountName: 'Plataforma', displayName: 'Adm', email: ADMIN, password: 'Test-only-password-123' }, null, { client: null, appUrl: null }, ENV, T0);
+    assert.equal(admin.initPoint, null);
+    const planId = await f.plan('Pro', 5000, 2);
+    // MOCK de falha do Mercado Pago na criação da assinatura (recusa definitiva).
+    const refuse: FetchLike = async () => ({ status: 400, text: async () => JSON.stringify({ message: 'payer_email inválido' }) });
+    const r = await registerWithPlan(f.db, { accountName: 'Loja B', displayName: 'Bia', email: 'bia@b.test', password: 'Test-only-password-123', planId }, null, { client: new MercadoPagoClient('TEST-MOCK-TOKEN', refuse), appUrl: 'https://omnihub.test' }, ENV, T0);
+    assert.equal(r.initPoint, null);
+    assert.match(r.checkoutError!, /payer_email/);
+    assert.ok(r.token, 'conta criada e logada: a tela de ativação permite tentar de novo');
 });

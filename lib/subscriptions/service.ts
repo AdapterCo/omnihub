@@ -3,6 +3,8 @@ import { RuleError } from '../errors.ts';
 import type { Actor, Entitlement } from '../domain.ts';
 import { MercadoPagoClient, ProviderError, type FetchLike, type MpPreapproval } from '../payments/mercadopago.ts';
 import { getSystemRole } from '../sales/discount.ts';
+import { guardedRegister, isRegistrationEnabled } from '../auth/service.ts';
+import { permissionsForRole } from '../authz/roles.ts';
 import { recordAudit } from '../audit/service.ts';
 import { logger } from '../log.ts';
 
@@ -91,18 +93,21 @@ export async function resolveEntitlement(db: D1Database, tenantId: string, base:
 
 // ---------------------------------------------------------------- painel da plataforma
 
-export type PlatformPlan = { id: string; name: string; priceCents: number; maxStores: number; active: boolean; createdAt: number; updatedAt: number };
+export type PlatformPlan = { id: string; name: string; priceCents: number; maxStores: number; description: string; features: string[]; active: boolean; createdAt: number; updatedAt: number };
 
 function requirePlatformAdmin(email: string | null | undefined, env: Env): string {
     if (!isPlatformAdmin(email, env)) throw new RuleError('Acesso restrito aos administradores da plataforma.', 403);
     return String(email).trim().toLowerCase();
 }
 
-const mapPlan = (r: { id: string; name: string; priceCents: number; maxStores: number; active: number; createdAt: number; updatedAt: number }): PlatformPlan => ({
+type PlanRow = { id: string; name: string; priceCents: number; maxStores: number; description: string; features: string; active: number; createdAt: number; updatedAt: number };
+const mapPlan = (r: PlanRow): PlatformPlan => ({
     id: r.id,
     name: r.name,
     priceCents: Number(r.priceCents),
     maxStores: Number(r.maxStores),
+    description: r.description ?? '',
+    features: String(r.features ?? '').split('\n').map((f) => f.trim()).filter(Boolean),
     active: Number(r.active) === 1,
     createdAt: Number(r.createdAt),
     updatedAt: Number(r.updatedAt),
@@ -110,14 +115,14 @@ const mapPlan = (r: { id: string; name: string; priceCents: number; maxStores: n
 
 export async function listPlatformPlans(db: D1Database, options: { onlyActive?: boolean } = {}): Promise<PlatformPlan[]> {
     const rows = await db
-        .prepare(`SELECT id, name, price_cents AS priceCents, max_stores AS maxStores, active, created_at AS createdAt, updated_at AS updatedAt FROM platform_plans ${options.onlyActive ? 'WHERE active = 1' : ''} ORDER BY price_cents, name`)
+        .prepare(`SELECT id, name, price_cents AS priceCents, max_stores AS maxStores, description, features, active, created_at AS createdAt, updated_at AS updatedAt FROM platform_plans ${options.onlyActive ? 'WHERE active = 1' : ''} ORDER BY price_cents, name`)
         .bind()
-        .all<{ id: string; name: string; priceCents: number; maxStores: number; active: number; createdAt: number; updatedAt: number }>();
+        .all<PlanRow>();
     return (rows.results ?? []).map(mapPlan);
 }
 
 /** Cria ou edita um plano. Mudança de preço/limite vale só para novas assinaturas (cada assinatura guarda a sua cópia). */
-export async function savePlatformPlan(db: D1Database, adminEmail: string | null, input: { id?: string; name: unknown; priceCents: unknown; maxStores: unknown; active: unknown }, env: Env = process.env, now = Date.now()): Promise<string> {
+export async function savePlatformPlan(db: D1Database, adminEmail: string | null, input: { id?: string; name: unknown; priceCents: unknown; maxStores: unknown; active: unknown; description?: unknown; features?: unknown }, env: Env = process.env, now = Date.now()): Promise<string> {
     const admin = requirePlatformAdmin(adminEmail, env);
     const name = String(input.name ?? '').trim();
     const priceCents = Number(input.priceCents);
@@ -126,16 +131,21 @@ export async function savePlatformPlan(db: D1Database, adminEmail: string | null
     if (!Number.isSafeInteger(priceCents) || priceCents < 1 || priceCents > MAX_PRICE_CENTS) throw new RuleError('Informe o preço mensal do plano.', 400);
     if (!Number.isSafeInteger(maxStores) || maxStores < 1 || maxStores > MAX_PLAN_STORES) throw new RuleError(`Limite de lojas: 1 a ${MAX_PLAN_STORES}.`, 400);
     const active = input.active === false ? 0 : 1;
+    const description = String(input.description ?? '').trim();
+    if (description.length > 300) throw new RuleError('Descrição do plano: no máximo 300 caracteres.', 400);
+    const featureList = (Array.isArray(input.features) ? input.features.map(String) : String(input.features ?? '').split('\n')).map((f) => f.trim()).filter(Boolean);
+    if (featureList.length > 15 || featureList.some((f) => f.length > 80)) throw new RuleError('Recursos do plano: até 15 linhas de até 80 caracteres.', 400);
+    const features = featureList.join('\n');
     const dup = await db.prepare('SELECT id FROM platform_plans WHERE lower(name) = lower(?) AND id <> ?').bind(name, input.id ?? '').first<{ id: string }>();
     if (dup) throw new RuleError('Já existe um plano com este nome.', 409);
     if (input.id) {
-        const result = await db.prepare('UPDATE platform_plans SET name = ?, price_cents = ?, max_stores = ?, active = ?, updated_at = ? WHERE id = ?').bind(name, priceCents, maxStores, active, now, input.id).run();
+        const result = await db.prepare('UPDATE platform_plans SET name = ?, price_cents = ?, max_stores = ?, description = ?, features = ?, active = ?, updated_at = ? WHERE id = ?').bind(name, priceCents, maxStores, description, features, active, now, input.id).run();
         if (result.meta.changes !== 1) throw new RuleError('Plano não encontrado.', 404);
         logger.info('plataforma.plano.alterado', { planId: input.id, admin });
         return input.id;
     }
     const id = randomUUID();
-    await db.prepare('INSERT INTO platform_plans (id, name, price_cents, max_stores, active, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)').bind(id, name, priceCents, maxStores, active, admin, now, now).run();
+    await db.prepare('INSERT INTO platform_plans (id, name, price_cents, max_stores, description, features, active, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(id, name, priceCents, maxStores, description, features, active, admin, now, now).run();
     logger.info('plataforma.plano.criado', { planId: id, admin });
     return id;
 }
@@ -404,5 +414,47 @@ export async function refreshAccountSubscription(db: D1Database, tenantId: strin
         } catch (error) {
             logger.error('assinatura.atualizacao_falhou', { subscriptionId: sub.id, error });
         }
+    }
+}
+
+// ---------------------------------------------------------------- cadastro com plano (modelo Adapter Connect)
+
+/** O que a página de cadastro mostra: planos disponíveis e se a contratação online está ligada. */
+export async function getSignupOptions(db: D1Database, env: Env = process.env): Promise<{ plans: PlatformPlan[]; billingReady: boolean; registrationEnabled: boolean }> {
+    return { plans: await listPlatformPlans(db, { onlyActive: true }), billingReady: platformBillingProblems(env).length === 0, registrationEnabled: isRegistrationEnabled(env) };
+}
+
+/**
+ * Cria a conta já com o plano escolhido e devolve o link de pagamento do Mercado Pago: escolher o
+ * plano, pagar e usar. Plano e e-mail de pagamento são conferidos ANTES de criar a conta. Se o
+ * Mercado Pago falhar depois da conta criada, ela fica sem acesso e o titular conclui pela tela de
+ * ativação (nada é cobrado sem o checkout). Administradores da plataforma não escolhem plano.
+ */
+export async function registerWithPlan(
+    db: D1Database,
+    input: { accountName: string; displayName: string; email: string; password: string; planId?: unknown; payerEmail?: unknown },
+    ip: string | null,
+    deps: SubscriptionDeps,
+    env: Env = process.env,
+    now = Date.now(),
+): Promise<{ token: string; expiresAt: number; initPoint: string | null; checkoutError: string | null }> {
+    const admin = isPlatformAdmin(input.email, env);
+    let plan: PlatformPlan | undefined;
+    const payerEmail = String(input.payerEmail ?? '').trim().toLowerCase() || String(input.email ?? '').trim().toLowerCase();
+    if (!admin) {
+        if (!deps.client || !deps.appUrl) throw new RuleError('A contratação online está indisponível no momento. Tente mais tarde.', 503);
+        plan = (await listPlatformPlans(db, { onlyActive: true })).find((p) => p.id === String(input.planId ?? ''));
+        if (!plan) throw new RuleError('Escolha um plano para criar a conta.', 400);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payerEmail) || payerEmail.length > 254) throw new RuleError('Informe o e-mail para pagamento.', 400);
+    }
+    const reg = await guardedRegister(db, { accountName: input.accountName, displayName: input.displayName, email: input.email, password: input.password }, ip, now, env);
+    if (admin || !plan) return { token: reg.token, expiresAt: reg.expiresAt, initPoint: null, checkoutError: null };
+    const owner: Actor = { userId: reg.userId, displayName: input.displayName.trim(), role: 'admin', storeId: null, permissions: permissionsForRole('OWNER') };
+    try {
+        const started = await startSubscription(db, reg.accountId, owner, { planId: plan.id, payerEmail }, deps, now);
+        return { token: reg.token, expiresAt: reg.expiresAt, initPoint: started.initPoint, checkoutError: null };
+    } catch (error) {
+        logger.error('assinatura.cadastro_checkout_falhou', { accountId: reg.accountId, error });
+        return { token: reg.token, expiresAt: reg.expiresAt, initPoint: null, checkoutError: error instanceof Error ? error.message : 'Não foi possível abrir o pagamento.' };
     }
 }

@@ -8,7 +8,7 @@ import { money, date } from '@/lib/domain';
 // Pago, cancelar) e "Plataforma" para os administradores da plataforma (cadastro de planos, limite
 // de lojas das contas dos administradores e situação das contas). Toda regra fica no servidor.
 
-type Plan = { id: string; name: string; priceCents: number; maxStores: number; active: boolean };
+type Plan = { id: string; name: string; priceCents: number; maxStores: number; description: string; features: string[]; active: boolean };
 type Sub = { id: string; planName: string; priceCents: number; maxStores: number; payerEmail: string; status: string; paidUntil: number; initPoint: string | null; lastError: string; createdAt: number };
 type Access = { status: string; accessUntil: number; maxStores: number };
 type SubscriptionView = { plans: Plan[]; subscriptions: Sub[]; billingReady: boolean; access: Access };
@@ -108,7 +108,7 @@ const toCents = (v: string) => { if (!/^\d+(?:[,.]\d{1,2})?$/.test(v.trim())) re
 
 export function PlatformPage() {
  const [data, setData] = useState<Overview | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
- const [form, setForm] = useState<{ id?: string; name: string; price: string; maxStores: string; active: boolean } | null>(null), [adminStores, setAdminStores] = useState('');
+ const [form, setForm] = useState<{ id?: string; name: string; price: string; maxStores: string; description: string; features: string; active: boolean } | null>(null), [adminStores, setAdminStores] = useState('');
  const run = async (body?: unknown, ok?: string) => {
   setBusy(true); setError(''); setNotice('');
   try { const d = await call<Overview>('/api/platform', body); setData(d); setAdminStores(d.adminMaxStores === null ? '' : String(d.adminMaxStores)); if (ok) setNotice(ok); return true; }
@@ -121,7 +121,7 @@ export function PlatformPage() {
   if (!form) return;
   const priceCents = toCents(form.price);
   if (!Number.isFinite(priceCents)) { setError('Preço inválido. Use, por exemplo, 99,90.'); return; }
-  if (await run({ action: 'savePlan', id: form.id, name: form.name, priceCents, maxStores: Number(form.maxStores), active: form.active }, 'Plano salvo.')) setForm(null);
+  if (await run({ action: 'savePlan', id: form.id, name: form.name, priceCents, maxStores: Number(form.maxStores), description: form.description, features: form.features, active: form.active }, 'Plano salvo.')) setForm(null);
  };
  if (!data) return <section className="panel p-6">{error ? <p role="alert" className="notice error">{error}</p> : <p className="muted"><LoaderCircle className="inline animate-spin" size={16} /> Carregando…</p>}</section>;
  return <div className="stack">
@@ -135,17 +135,19 @@ export function PlatformPage() {
     </>}
   </section>
   <section className="panel p-6 stack">
-   <div className="split"><h2>Planos</h2><Button size="sm" onClick={() => setForm({ name: '', price: '', maxStores: '', active: true })}><Plus /> Novo plano</Button></div>
+   <div className="split"><h2>Planos</h2><Button size="sm" onClick={() => setForm({ name: '', price: '', maxStores: '', description: '', features: '', active: true })}><Plus /> Novo plano</Button></div>
    <p className="muted">Cobrança mensal. Alterar preço ou limite vale para novas assinaturas; quem já assinou mantém o que contratou.</p>
    {form && <form className="form-grid" onSubmit={(e) => void savePlan(e)}>
     <label className="field">Nome<input required maxLength={60} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
     <label className="field">Preço mensal (R$)<input required inputMode="decimal" placeholder="0,00" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} /></label>
     <label className="field">Limite de lojas<input required type="number" min={1} value={form.maxStores} onChange={(e) => setForm({ ...form, maxStores: e.target.value })} /></label>
+    <label className="field full">Descrição (aparece na página de cadastro)<input maxLength={300} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Para quem é este plano" /></label>
+    <label className="field full">Recursos (um por linha, aparecem no cartão do plano)<textarea rows={5} value={form.features} onChange={(e) => setForm({ ...form, features: e.target.value })} /></label>
     <label className="field inline" style={{ gap: 6 }}><input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} style={{ width: 'auto', height: 'auto' }} /> Disponível para contratar</label>
     <div className="form-actions full"><Button type="button" variant="outline" onClick={() => setForm(null)}>Cancelar</Button><Button type="submit" disabled={busy}><Check /> Salvar plano</Button></div>
    </form>}
    {!data.plans.length ? <p className="notice">Nenhum plano cadastrado. Sem plano disponível, contas novas não conseguem assinar.</p>
-    : data.plans.map((p) => <div key={p.id} className="list-row px-0"><span>{p.name} · {money(p.priceCents)}/mês · até {p.maxStores} {p.maxStores === 1 ? 'loja' : 'lojas'}{p.active ? '' : ' · indisponível'}</span><Button size="sm" variant="outline" onClick={() => setForm({ id: p.id, name: p.name, price: (p.priceCents / 100).toFixed(2).replace('.', ','), maxStores: String(p.maxStores), active: p.active })}><Pencil /> Editar</Button></div>)}
+    : data.plans.map((p) => <div key={p.id} className="list-row px-0"><span>{p.name} · {money(p.priceCents)}/mês · até {p.maxStores} {p.maxStores === 1 ? 'loja' : 'lojas'}{p.active ? '' : ' · indisponível'}</span><Button size="sm" variant="outline" onClick={() => setForm({ id: p.id, name: p.name, price: (p.priceCents / 100).toFixed(2).replace('.', ','), maxStores: String(p.maxStores), description: p.description, features: p.features.join('\n'), active: p.active })}><Pencil /> Editar</Button></div>)}
   </section>
   <section className="panel p-6 stack">
    <h2>Contas dos administradores da plataforma</h2>
@@ -159,4 +161,110 @@ export function PlatformPage() {
    {data.accounts.map((a) => <div key={a.id} className="list-row px-0"><span><strong>{a.name}</strong> · {a.ownerEmail || 'sem titular'}<br /><small className="muted">{a.platform ? 'Administrador da plataforma' : `${ACCESS_LABEL[a.status] ?? a.status}${a.planName ? ` · ${a.planName} (${SUB_LABEL[a.subscriptionStatus] ?? a.subscriptionStatus})` : ''}`}</small></span><small>{a.stores}/{a.platform ? data.adminMaxStores ?? 0 : a.maxStores} lojas{!a.platform && a.accessUntil > 0 ? ` · até ${date(a.accessUntil)}` : ''}</small></div>)}
   </section>
  </div>;
+}
+
+// ---------------------------------------------------------------- cadastro com plano (modelo Adapter Connect)
+
+type SignupOptions = { plans: Plan[]; billingReady: boolean; registrationEnabled: boolean };
+
+function PlanCard({ plan, selected, onSelect }: { plan: Plan; selected: boolean; onSelect: () => void }) {
+ return <button type="button" onClick={onSelect} className="panel p-4 stack text-left" style={{ cursor: 'pointer', borderColor: selected ? 'var(--primary, #2563eb)' : undefined, boxShadow: selected ? '0 0 0 2px var(--primary, #2563eb)' : undefined }}>
+  <div className="split"><strong>{plan.name}</strong>{selected && <span className="badge">Escolhido</span>}</div>
+  {plan.description && <span className="muted">{plan.description}</span>}
+  <span className="text-2xl font-semibold">{money(plan.priceCents)}<small className="muted"> /mês</small></span>
+  <span>Até {plan.maxStores} {plan.maxStores === 1 ? 'loja' : 'lojas'}</span>
+  {plan.features.length > 0 && <ul className="stack" style={{ gap: 4, margin: 0, paddingLeft: 0, listStyle: 'none' }}>{plan.features.map((f) => <li key={f} className="inline" style={{ gap: 6 }}><Check size={14} /> {f}</li>)}</ul>}
+ </button>;
+}
+
+/** Criar conta já escolhendo o plano: plano, empresa, admin, e-mail para pagamento, senha → checkout. */
+export function SignupWithPlan({ onRegistered, onLogin }: { onRegistered: () => void; onLogin: () => void }) {
+ const [options, setOptions] = useState<SignupOptions | null>(null), [planId, setPlanId] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState('');
+ const [company, setCompany] = useState(''), [name, setName] = useState(''), [email, setEmail] = useState(''), [payer, setPayer] = useState(''), [payerEdited, setPayerEdited] = useState(false), [password, setPassword] = useState('');
+ useEffect(() => { call<SignupOptions>('/api/plans').then((o) => { setOptions(o); if (o.plans.length === 1) setPlanId(o.plans[0].id); }).catch(() => setOptions({ plans: [], billingReady: false, registrationEnabled: true })); }, []);
+ const submit = async (e: FormEvent) => {
+  e.preventDefault();
+  setBusy(true); setError('');
+  try {
+   const r = await call<{ initPoint: string | null; checkoutError: string | null }>('/api/auth/register', { accountName: company, displayName: name, email, password, planId, payerEmail: payerEdited ? payer : email });
+   if (r.initPoint) { window.location.assign(r.initPoint); return; }
+   onRegistered(); // administrador da plataforma, ou checkout que não abriu (a tela de ativação mostra o que fazer)
+  } catch (err) { setError(err instanceof Error ? err.message : 'Não foi possível criar a conta.'); setBusy(false); }
+ };
+ if (!options) return <p className="muted"><LoaderCircle className="inline animate-spin" size={16} /> Carregando planos…</p>;
+ if (!options.registrationEnabled) return <p className="notice">O cadastro de novas contas está desativado. <button type="button" className="underline" onClick={onLogin}>Entrar</button></p>;
+ const available = options.billingReady && options.plans.length > 0;
+ return <div className="stack">
+  {available ? <div className="cards">{options.plans.map((p) => <PlanCard key={p.id} plan={p} selected={p.id === planId} onSelect={() => setPlanId(p.id)} />)}</div>
+   : <p className="notice">A contratação online está indisponível no momento. Tente mais tarde.</p>}
+  <p className="muted mb-0">Sem plano grátis. A conta é ativada após o pagamento confirmado.</p>
+  <form className="form-grid" onSubmit={(e) => void submit(e)}>
+   {available && <label className="field full">Plano<select required value={planId} onChange={(e) => setPlanId(e.target.value)}><option value="">Escolha o plano</option>{options.plans.map((p) => <option key={p.id} value={p.id}>{p.name} - {money(p.priceCents)}/mês</option>)}</select></label>}
+   <label className="field">Empresa<input required minLength={2} maxLength={100} value={company} onChange={(e) => setCompany(e.target.value)} placeholder="Nome da empresa" /></label>
+   <label className="field">Seu nome<input required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome do administrador" /></label>
+   <label className="field">E-mail de acesso<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="voce@empresa.com" /></label>
+   <label className="field">E-mail para pagamento<input required type="email" value={payerEdited ? payer : email} onChange={(e) => { setPayerEdited(true); setPayer(e.target.value); }} placeholder="E-mail da conta Mercado Pago" /></label>
+   <label className="field">Senha<input required type="password" minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Mínimo de 8 caracteres" /></label>
+   {error && <p role="alert" className="notice error full">{error}</p>}
+   <div className="full"><Button className="w-full" disabled={busy}>{busy ? <LoaderCircle className="animate-spin" /> : <ExternalLink />} Continuar para pagamento</Button></div>
+  </form>
+  <p className="muted mb-0">Já tem conta? <button type="button" className="underline" onClick={onLogin}>Entrar</button></p>
+ </div>;
+}
+
+/** Conta criada que ainda não pagou: só a ativação (continuar pagamento, conferir, trocar de plano, sair). */
+export function ActivationScreen({ ownerEmail, onActivated, onLogout }: { ownerEmail: string; onActivated: () => void; onLogout: () => void }) {
+ const [view, setView] = useState<SubscriptionView | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState(''), [choosing, setChoosing] = useState(false), [planId, setPlanId] = useState(''), [payer, setPayer] = useState(ownerEmail), [checks, setChecks] = useState(0);
+ const load = async (refresh: boolean) => {
+  try {
+   const v = await call<SubscriptionView>(`/api/subscription${refresh ? '?refresh=1' : ''}`);
+   setView(v);
+   if (v.access.accessUntil > Date.now() && ['active', 'trial', 'cancelled', 'platform'].includes(v.access.status)) onActivated();
+  } catch (e) { setError(e instanceof Error ? e.message : 'Falha ao consultar.'); }
+ };
+ useEffect(() => {
+  const back = new URLSearchParams(window.location.search).get('assinatura') === 'retorno';
+  if (back) window.history.replaceState(null, '', window.location.pathname);
+  void load(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, []);
+ const pending = view?.subscriptions.find((s) => s.status === 'PENDING' && s.initPoint) ?? null;
+ // Enquanto há pagamento aberto, confere sozinho a cada 10 s (até ~5 min nesta tela).
+ useEffect(() => {
+  if (!pending || checks >= 30) return;
+  const t = setTimeout(() => { setChecks((c) => c + 1); void load(true); }, 10_000);
+  return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [pending?.id, checks]);
+ const start = async (e: FormEvent) => {
+  e.preventDefault();
+  setBusy(true); setError('');
+  try { const r = await call<{ initPoint: string }>('/api/subscription', { action: 'start', planId, payerEmail: payer }); window.location.assign(r.initPoint); }
+  catch (err) { setError(err instanceof Error ? err.message : 'Falha ao abrir o pagamento.'); setBusy(false); }
+ };
+ const failed = view?.subscriptions[0] && !pending ? view.subscriptions[0] : null;
+ return <section className="panel login stack" style={{ maxWidth: 980 }}>
+  <h1>Ative sua conta</h1>
+  {!view ? <p className="muted"><LoaderCircle className="inline animate-spin" size={16} /> Conferindo pagamento…</p> : <>
+   {pending && !choosing ? <div className="stack">
+    <p>Plano <strong>{pending.planName}</strong> · {money(pending.priceCents)}/mês. O pagamento ainda não foi confirmado pelo Mercado Pago.</p>
+    <p className="muted"><LoaderCircle className="inline animate-spin" size={14} /> Conferindo automaticamente. Se você acabou de pagar, aguarde alguns instantes.</p>
+    <div className="inline flex-wrap" style={{ gap: 8 }}>
+     <Button onClick={() => window.location.assign(pending.initPoint!)}><ExternalLink /> Ir para o pagamento</Button>
+     <Button variant="outline" disabled={busy} onClick={() => { setChecks(0); void load(true); }}><RefreshCw /> Já paguei, verificar</Button>
+     <Button variant="ghost" onClick={() => setChoosing(true)}>Escolher outro plano</Button>
+    </div>
+   </div> : <form className="stack" onSubmit={(e) => void start(e)}>
+    {failed?.lastError && <p className="notice error">{failed.lastError}</p>}
+    {!view.billingReady || !view.plans.length ? <p className="notice">A contratação online está indisponível no momento. Tente mais tarde.</p> : <>
+     <p>Escolha o plano e conclua o pagamento para começar a usar.</p>
+     <div className="cards">{view.plans.map((p) => <PlanCard key={p.id} plan={p} selected={p.id === planId} onSelect={() => setPlanId(p.id)} />)}</div>
+     <label className="field">E-mail para pagamento<input required type="email" value={payer} onChange={(e) => setPayer(e.target.value)} /></label>
+     <div className="inline" style={{ gap: 8 }}><Button disabled={busy || !planId}>{busy ? <LoaderCircle className="animate-spin" /> : <ExternalLink />} Continuar para pagamento</Button>{pending && <Button type="button" variant="outline" onClick={() => setChoosing(false)}>Voltar</Button>}</div>
+    </>}
+   </form>}
+   {error && <p role="alert" className="notice error">{error}</p>}
+  </>}
+  <p className="muted mb-0">Sem plano grátis. A conta é ativada após o pagamento confirmado. <button type="button" className="underline" onClick={onLogout}>Sair</button></p>
+ </section>;
 }
