@@ -13,13 +13,13 @@ import { logger } from '../log.ts';
 //
 // Configuração do servidor (nada presumido; sem ela a contratação fica desligada e a tela explica):
 //   PLATFORM_MP_ACCESS_TOKEN   Access Token da conta Mercado Pago que recebe as mensalidades
-//   PLATFORM_MP_WEBHOOK_SECRET segredo da assinatura (x-signature) do webhook dessa aplicação
 //   PLATFORM_ADMIN_EMAILS      e-mails (separados por vírgula) dos administradores da plataforma
 //   APP_URL                    endereço público do OmniHub (retorno do checkout)
 //
 // O acesso só é liberado por consulta autenticada ao Mercado Pago: fatura (authorized_payment) com
 // pagamento "approved", da nossa assinatura e no valor contratado. Cada fatura paga vale um mês a
-// partir da data da cobrança (plano mensal). O webhook só dispara essa consulta.
+// partir da data da cobrança (plano mensal). Sem webhook (decisão do usuário): a confirmação vem
+// sempre por consulta — na volta do checkout, no botão Atualizar e no worker periódico.
 
 type Env = Record<string, string | undefined>;
 const ADMIN_MAX_STORES_KEY = 'admin_max_stores';
@@ -43,7 +43,7 @@ export function isPlatformAdmin(email: string | null | undefined, env: Env = pro
 
 /** O que falta na configuração do servidor para cobrar as assinaturas. */
 export function platformBillingProblems(env: Env = process.env): string[] {
-    const problems = ['PLATFORM_MP_ACCESS_TOKEN', 'PLATFORM_MP_WEBHOOK_SECRET', 'APP_URL'].filter((k) => !(env[k] ?? '').trim()).map((k) => `${k} não definida`);
+    const problems = ['PLATFORM_MP_ACCESS_TOKEN', 'APP_URL'].filter((k) => !(env[k] ?? '').trim()).map((k) => `${k} não definida`);
     if (env.APP_URL) {
         try {
             const u = new URL(env.APP_URL.trim());
@@ -152,7 +152,7 @@ export async function setAdminMaxStores(db: D1Database, adminEmail: string | nul
 
 export type PlatformAccount = { id: string; name: string; ownerEmail: string; status: string; accessUntil: number; maxStores: number; stores: number; planName: string; subscriptionStatus: string; createdAt: number; platform: boolean };
 
-export async function getPlatformOverview(db: D1Database, adminEmail: string | null, env: Env = process.env): Promise<{ plans: PlatformPlan[]; adminMaxStores: number | null; accounts: PlatformAccount[]; billingProblems: string[]; webhookUrl: string | null }> {
+export async function getPlatformOverview(db: D1Database, adminEmail: string | null, env: Env = process.env): Promise<{ plans: PlatformPlan[]; adminMaxStores: number | null; accounts: PlatformAccount[]; billingProblems: string[] }> {
     requirePlatformAdmin(adminEmail, env);
     const rows = await db
         .prepare(
@@ -171,7 +171,6 @@ export async function getPlatformOverview(db: D1Database, adminEmail: string | n
         plans: await listPlatformPlans(db),
         adminMaxStores: raw === null ? null : Number(raw),
         billingProblems: problems,
-        webhookUrl: problems.length ? null : `${env.APP_URL!.trim().replace(/\/+$/, '')}/api/platform/subscriptions/webhook`,
         accounts: (rows.results ?? []).map((r) => ({
             id: r.id,
             name: r.name,
@@ -368,21 +367,6 @@ export async function cancelAccountSubscription(db: D1Database, tenantId: string
     for (const sub of open) await cancelSub(db, sub, deps.client, now);
     await applyToAccount(db, tenantId, now);
     await recordAudit(db, { tenantId, userId: actor.userId, operator: actor.displayName, action: 'subscription.cancel', description: 'Assinatura cancelada pelo titular', entity: 'account_subscription', entityId: open[0].id }, now);
-}
-
-/** Webhook: com a assinatura x-signature já conferida, identifica a assinatura e consulta o Mercado Pago. */
-export async function handlePlatformWebhook(db: D1Database, params: { type: string | null; dataId: string | null; signatureOk: boolean }, deps: SubscriptionDeps, now = Date.now()): Promise<number> {
-    if (!deps.client) return 503;
-    if (!params.signatureOk) return 401;
-    if (!params.dataId) return 200;
-    let preapprovalId: string | null = null;
-    if (params.type === 'subscription_preapproval') preapprovalId = params.dataId;
-    else if (params.type === 'subscription_authorized_payment') preapprovalId = (await deps.client.getInvoice(params.dataId)).preapprovalId || null;
-    else return 200; // outros tópicos: aceitos e ignorados
-    const sub = preapprovalId ? await loadSub(db, 'preapproval_id', preapprovalId) : null;
-    if (!sub) return 200;
-    await reconcileSubscription(db, sub.id, deps.client, now);
-    return 200;
 }
 
 /** Worker: confere assinaturas abertas (webhook perdido, renovação, criação incerta). */

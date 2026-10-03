@@ -1,20 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHmac } from 'node:crypto';
 import { createFakeD1 } from './helpers/fakeD1.ts';
 import { registerAccount } from '../lib/auth/service.ts';
 import { permissionsForRole } from '../lib/authz/roles.ts';
 import { requireActive } from '../lib/domain.ts';
 import { dispatchCommand } from '../lib/relationalCommands.ts';
 import { createStore } from '../lib/catalog/service.ts';
-import { MercadoPagoClient, verifyMercadoPagoSignature, type FetchLike } from '../lib/payments/mercadopago.ts';
+import { MercadoPagoClient, type FetchLike } from '../lib/payments/mercadopago.ts';
 import {
-    addOneMonth, cancelAccountSubscription, getPlatformOverview, handlePlatformWebhook, listPlatformPlans, reconcileOpenSubscriptions,
+    addOneMonth, cancelAccountSubscription, getPlatformOverview, listPlatformPlans, reconcileOpenSubscriptions,
     reconcileSubscription, resolveEntitlement, savePlatformPlan, setAdminMaxStores, startSubscription, type SubscriptionDeps,
 } from '../lib/subscriptions/service.ts';
 
 const ADMIN = 'admin@plataforma.test';
-const ENV = { PLATFORM_ADMIN_EMAILS: ADMIN, PLATFORM_MP_ACCESS_TOKEN: 'TEST-MOCK-TOKEN', PLATFORM_MP_WEBHOOK_SECRET: 'segredo-mock', APP_URL: 'https://omnihub.test' };
+const ENV = { PLATFORM_ADMIN_EMAILS: ADMIN, PLATFORM_MP_ACCESS_TOKEN: 'TEST-MOCK-TOKEN', APP_URL: 'https://omnihub.test' };
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 9, 3, 15, 0, 0);
 
@@ -104,7 +103,7 @@ test('planos: só o administrador da plataforma cadastra; nenhum plano pré-cada
     assert.deepEqual(await listPlatformPlans(f.db, { onlyActive: true }), []);
     await assert.rejects(() => getPlatformOverview(f.db, 'dona@cliente.test', ENV), /administradores/);
     const overview = await getPlatformOverview(f.db, ADMIN, ENV);
-    assert.equal(overview.webhookUrl, 'https://omnihub.test/api/platform/subscriptions/webhook');
+    assert.deepEqual(overview.billingProblems, []);
     assert.equal(overview.accounts.length, 1);
 });
 
@@ -141,20 +140,14 @@ test('assinar: cria assinatura mensal pendente no Mercado Pago e só libera aces
     assert.ok(storeId);
 });
 
-test('webhook: exige x-signature válida; fatura paga avisada pelo webhook libera o acesso', async () => {
+test('sem webhook: a fatura paga é encontrada pela consulta periódica do worker', async () => {
     const f = await fixture();
     const planId = await f.plan('Pro', 5000, 2);
     await startSubscription(f.db, f.tenantId, f.owner, { planId, payerEmail: 'pagador@mock.test' }, f.deps, T0);
     f.mp.authorize('pre-1');
-    const invoiceId = f.mp.pay('pre-1', T0, '50.00');
-    const ts = '1704908010', rid = 'req-1';
-    const v1 = createHmac('sha256', ENV.PLATFORM_MP_WEBHOOK_SECRET).update(`id:${invoiceId};request-id:${rid};ts:${ts};`).digest('hex');
-    assert.equal(verifyMercadoPagoSignature({ xSignature: `ts=${ts},v1=${v1}`, xRequestId: rid, dataId: invoiceId, secret: ENV.PLATFORM_MP_WEBHOOK_SECRET }), true);
-    assert.equal(verifyMercadoPagoSignature({ xSignature: `ts=${ts},v1=${v1}`, xRequestId: rid, dataId: invoiceId, secret: 'outro' }), false);
-    assert.equal(await handlePlatformWebhook(f.db, { type: 'subscription_authorized_payment', dataId: invoiceId, signatureOk: false }, f.deps, T0), 401);
+    f.mp.pay('pre-1', T0, '50.00');
     assert.equal((await f.entitlement()).status, 'none');
-    assert.equal(await handlePlatformWebhook(f.db, { type: 'payment', dataId: '123', signatureOk: true }, f.deps, T0), 200, 'outros tópicos são ignorados');
-    assert.equal(await handlePlatformWebhook(f.db, { type: 'subscription_authorized_payment', dataId: invoiceId, signatureOk: true }, f.deps, T0 + 1000), 200);
+    await reconcileOpenSubscriptions(f.db, f.deps.client!, T0 + 5 * 60 * 1000);
     assert.equal((await f.entitlement()).status, 'active');
 });
 

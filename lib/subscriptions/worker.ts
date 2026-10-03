@@ -1,9 +1,10 @@
 import { reconcileOpenSubscriptions, subscriptionDepsFromEnv } from './service.ts';
 import { logger } from '../log.ts';
 
-// Conferência automática das assinaturas da plataforma (webhook perdido, renovação mensal,
-// criação com resposta incerta) e expiração das contas cujo período pago terminou. Mesmo padrão
-// dos outros workers: laço em processo, sem sobreposição, falha de um ciclo não derruba o servidor.
+// Consulta periódica das assinaturas da plataforma ao Mercado Pago (não há webhook): primeiro
+// pagamento, renovação mensal, criação com resposta incerta e expiração das contas cujo período
+// pago terminou. Mesmo padrão dos outros workers: laço em processo, sem sobreposição, falha de um
+// ciclo não derruba o servidor.
 // SUBSCRIPTION_WORKER_INTERVAL_MS: intervalo em ms (padrão 300000; 0 desliga).
 const DEFAULT_INTERVAL_MS = 300_000;
 

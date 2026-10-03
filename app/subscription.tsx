@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
-import { Check, Copy, ExternalLink, LoaderCircle, Pencil, Plus, RefreshCw, X } from 'lucide-react';
+import { Check, ExternalLink, LoaderCircle, Pencil, Plus, RefreshCw, X } from 'lucide-react';
 import { money, date } from '@/lib/domain';
 
 // Telas de planos (§43/§44): "Assinatura" para o titular da conta (escolher plano, pagar no Mercado
@@ -103,7 +103,7 @@ export function SubscriptionPage({ ownerEmail, storesUsed, onChanged }: { ownerE
  </div>;
 }
 
-type Overview = { plans: Plan[]; adminMaxStores: number | null; billingProblems: string[]; webhookUrl: string | null; accounts: { id: string; name: string; ownerEmail: string; status: string; accessUntil: number; maxStores: number; stores: number; planName: string; subscriptionStatus: string; platform: boolean }[] };
+type Overview = { plans: Plan[]; adminMaxStores: number | null; billingProblems: string[]; accounts: { id: string; name: string; ownerEmail: string; status: string; accessUntil: number; maxStores: number; stores: number; planName: string; subscriptionStatus: string; platform: boolean }[] };
 const toCents = (v: string) => { if (!/^\d+(?:[,.]\d{1,2})?$/.test(v.trim())) return NaN; const [a, b = ''] = v.trim().replace(',', '.').split('.'); return Number(a) * 100 + Number(b.padEnd(2, '0')); };
 
 export function PlatformPage() {
@@ -131,8 +131,7 @@ export function PlatformPage() {
    <h2>Cobrança das assinaturas (Mercado Pago)</h2>
    {data.billingProblems.length ? <p className="notice error">Contratação online desligada. Configure no servidor: {data.billingProblems.join('; ')}.</p>
     : <>
-     <p className="muted">No painel do Mercado Pago (Suas integrações &gt; aplicação &gt; Webhooks), cadastre esta URL com os eventos <strong>Planos e assinaturas</strong> (assinatura e pagamento recorrente) e use o mesmo segredo de PLATFORM_MP_WEBHOOK_SECRET.</p>
-     <div className="inline" style={{ gap: 8 }}><code className="truncate">{data.webhookUrl}</code><Button size="sm" variant="outline" onClick={() => { void navigator.clipboard.writeText(data.webhookUrl!); setNotice('URL copiada.'); }}><Copy /> Copiar</Button></div>
+     <p className="muted">Ativa. Os pagamentos são conferidos por consulta ao Mercado Pago: na volta do pagamento, no botão Atualizar da tela Assinatura e automaticamente a cada poucos minutos. Não é preciso cadastrar webhook.</p>
     </>}
   </section>
   <section className="panel p-6 stack">
