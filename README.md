@@ -124,9 +124,17 @@ Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 - "Esqueci minha senha" precisa de `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` e `APP_URL` no `.env` (veja `.env.example`); sem elas, o administrador redefine o acesso em **Equipe > Definir acesso** (isso também desliga a verificação em duas etapas do membro, para quem perdeu o celular).
 - `REGISTRATION_ENABLED=false` desativa o cadastro público.
 
+### Planos da plataforma (Mercado Pago)
+
+- Conta nova nasce **sem acesso** (não há teste grátis): o titular escolhe um plano em **Assinatura**, paga na página do Mercado Pago e o acesso é liberado quando o pagamento é confirmado. A cobrança é mensal e automática; cada pagamento confirmado vale um mês, sem dias de tolerância.
+- No `.env`: `PLATFORM_MP_ACCESS_TOKEN` (Access Token da conta Mercado Pago que recebe), `PLATFORM_MP_WEBHOOK_SECRET`, `APP_URL` e `PLATFORM_ADMIN_EMAILS` (seu e-mail de login; separe vários por vírgula). Depois `docker compose up -d` para recriar o container.
+- Entre com o e-mail de administrador: o menu **Plataforma** mostra a URL do webhook. Cadastre-a no painel do Mercado Pago (Suas integrações > aplicação > Webhooks) com os eventos de **Planos e assinaturas**; o segredo exibido lá vai em `PLATFORM_MP_WEBHOOK_SECRET`.
+- Em **Plataforma**: cadastre os planos (nome, preço mensal, limite de lojas) — nenhum vem pré-cadastrado — e o limite de lojas das contas dos administradores (que não pagam).
+- `SUBSCRIPTION_WORKER_INTERVAL_MS` (padrão 300000; 0 desliga) controla a conferência automática de renovações.
+
 ## Próxima etapa
 
-1. Definir o provedor de cobrança, planos, valores e política de renovação; implementar ciclo completo com eventos autenticados, repetição segura e conciliação.
+1. Validar os planos com a conta Mercado Pago real (sandbox primeiro): assinatura, primeiro pagamento, renovação, cancelamento e webhook.
 2. Restrição por loja em `lib/catalog`/`lib/inventory` (já existe em `lib/cash`/`lib/sales`); login comercial independente para clientes finais.
 3. Validar a transmissão de NF-e (Fase 5, Marco 3) contra o serviço real da SEFAZ de Homologação com certificado A1 de teste, confirmando a estrutura do envelope SOAP contra o MOC 7.00 Anexo II antes de qualquer emissão real.
 4. Fase 6 (expandir NF-e: múltiplos produtos/clientes, rejeições, cancelamento fiscal, inutilização, DANFE) e Fase 7 (NFC-e modelo 65); testar concorrência e isolamento com volume antes do lançamento comercial.

@@ -2,6 +2,7 @@ import { getCurrentUser } from '@/app/auth';
 import { database } from '@/db/database';
 import { loadPermissions } from '@/lib/authz/service';
 import type { Actor, Entitlement } from '@/lib/domain';
+import { resolveEntitlement } from '@/lib/subscriptions/service';
 
 // Resolve usuário da sessão → conta (tenant) → actor com permissões, para rotas fora de
 // /api/workspace (ex.: upload/download de documentos). Mesma regra de app/api/workspace/route.ts.
@@ -17,6 +18,6 @@ export async function resolveWorkspaceSession(): Promise<{ tenantId: string; act
  return {
   tenantId: row.id,
   actor: { userId: user.userId, role: row.role, storeId: row.storeId, displayName: row.displayName, permissions },
-  plan: { status: row.status, accessUntil: Number(row.accessUntil), maxStores: Number(row.maxStores) },
+  plan: await resolveEntitlement(database(), row.id, { status: row.status, accessUntil: Number(row.accessUntil), maxStores: Number(row.maxStores) }),
  };
 }

@@ -24,6 +24,12 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
       APP_URL: ${APP_URL:-}
+      # Planos da plataforma cobrados pelo Mercado Pago (Assinatura/Plataforma). Sem os dois primeiros e
+      # APP_URL, a contratação online fica desligada; sem PLATFORM_ADMIN_EMAILS não há painel Plataforma.
+      PLATFORM_MP_ACCESS_TOKEN: ${PLATFORM_MP_ACCESS_TOKEN:-}
+      PLATFORM_MP_WEBHOOK_SECRET: ${PLATFORM_MP_WEBHOOK_SECRET:-}
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
+      SUBSCRIPTION_WORKER_INTERVAL_MS: ${SUBSCRIPTION_WORKER_INTERVAL_MS:-300000}
     volumes:
       - omnihub_files:/data/storage
     # Sem resposta saudável, o Docker marca o container como unhealthy e o Traefik para de

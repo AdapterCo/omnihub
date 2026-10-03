@@ -15,6 +15,9 @@ export async function register() {
     if (startSignatureWorker(database())) logger.info('signature-worker.iniciado');
     const { startBillingWorker } = await import('./lib/billing/worker');
     if (startBillingWorker(database())) logger.info('billing-worker.iniciado');
+    // Assinaturas da plataforma (planos pagos pelo Mercado Pago): renovação e expiração.
+    const { startSubscriptionWorker } = await import('./lib/subscriptions/worker');
+    if (startSubscriptionWorker(database())) logger.info('subscription-worker.iniciado');
     // Limpeza de eventos de webhook resolvidos (90 dias) e credenciais temporárias vencidas.
     const { startMaintenanceWorker } = await import('./lib/maintenance');
     if (startMaintenanceWorker(database())) logger.info('maintenance-worker.iniciado');

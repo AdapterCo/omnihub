@@ -27,12 +27,13 @@ import { logger } from '@/lib/log';
 import { withIdempotency } from '@/lib/idempotency';
 import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 import { dispatchCommand } from '@/lib/relationalCommands';
+import { resolveEntitlement, isPlatformAdmin } from '@/lib/subscriptions/service';
 export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store'};
 const reply=(data:unknown,status=200)=>Response.json(data,{status,headers});
 type Row={id:string;name:string;state:string;revision:number;subscription_status:string;access_until:number;max_stores:number;role:string;store_id:string|null;display_name:string};
 async function account(userId:string){return database().prepare('SELECT a.*, m.role, m.store_id, m.display_name FROM memberships m JOIN accounts a ON a.id=m.account_id WHERE m.user_id=?').bind(userId).first<Row>()}
-async function context(row:Row,userId:string){const permissions=await loadPermissions(database(),userId,row.id,row.role);return {actor:{userId,role:row.role,storeId:row.store_id,displayName:row.display_name,permissions} satisfies Actor,plan:{status:row.subscription_status,accessUntil:row.access_until,maxStores:row.max_stores}}}
+async function context(row:Row,userId:string){const permissions=await loadPermissions(database(),userId,row.id,row.role);return {actor:{userId,role:row.role,storeId:row.store_id,displayName:row.display_name,permissions} satisfies Actor,plan:await resolveEntitlement(database(),row.id,{status:row.subscription_status,accessUntil:Number(row.access_until),maxStores:Number(row.max_stores)})}}
 // Fase 1–3 cortadas (cutover): todo o estado operacional (loja/produto/estoque/
 // transferência/caixa/venda/auditoria/equipe/clientes/fornecedores/fiscal) vem das tabelas relacionais.
 // Janelas do snapshot: a tela recarrega a cada 60 s, no foco e após cada operação; carregar todo o
@@ -105,7 +106,7 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
   users,customers,suppliers,fiscalConfigs,fiscalDocuments,fiscalInutilizations,nfceConfigs,myDiscountLimitBp,discountLimits,paymentConfigs,openCharges,orders,units,contracts,documents,signatureConfigs,
  };
 }
-async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);return {account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
+async function snapshot(row:Row,userId:string){const {actor,plan}=await context(row,userId);const me=await database().prepare('SELECT email FROM users WHERE id=?').bind(userId).first<{email:string|null}>();return {platformAdmin:isPlatformAdmin(me?.email),userEmail:me?.email??'',account:{name:row.name,subscription:plan},actor:{...actor,permissions:Array.from(actor.permissions)},state:await fullState(database(),row.id,actor),revision:row.revision}}
 export async function GET(request:Request){
  try{
   const user=await getCurrentUser();if(!user)return reply({error:'Entre para acessar sua conta.',signIn:true},401);

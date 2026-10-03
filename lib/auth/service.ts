@@ -118,7 +118,9 @@ export async function registerAccount(
 
     await db.batch([
         db.prepare('INSERT INTO users (id, display_name, email, password_hash, created_at) VALUES (?,?,?,?,?)').bind(userId, displayName, email, passwordHash, now),
-        db.prepare('INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES (?,?,?,0,?,?,3,?)').bind(accountId, accountName, '{}', 'trial', now + 7 * 24 * 60 * 60 * 1000, now),
+        // Sem teste grátis (decisão do usuário): a conta nasce sem acesso e sem lojas até assinar um
+        // plano (lib/subscriptions/service.ts). Administradores da plataforma são liberados à parte.
+        db.prepare('INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES (?,?,?,0,?,0,0,?)').bind(accountId, accountName, '{}', 'none', now),
         db.prepare('INSERT INTO memberships (user_id,account_id,role,store_id,display_name) VALUES (?,?,?,NULL,?)').bind(userId, accountId, 'admin', displayName),
         db.prepare('INSERT INTO user_tenant_roles (id,user_id,tenant_id,role_id) VALUES (?,?,?,?)').bind(crypto.randomUUID(), userId, accountId, ownerRole.id),
         db.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?,?,?,?)').bind(sessionTokenHash(token), userId, expiresAt, now),
