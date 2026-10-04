@@ -126,15 +126,15 @@ Emissão fiscal continua travada em Homologação (`lib/fiscal/endpoints.ts`).
 
 ### Planos da plataforma (Mercado Pago)
 
-- Conta nova nasce **sem acesso** (não há teste grátis): o titular escolhe um plano em **Assinatura**, paga na página do Mercado Pago e o acesso é liberado quando o pagamento é confirmado. A cobrança é mensal e automática; cada pagamento confirmado vale um mês, sem dias de tolerância.
-- No `.env`: `PLATFORM_MP_ACCESS_TOKEN` (Access Token da conta Mercado Pago que recebe), `APP_URL` e `PLATFORM_ADMIN_EMAILS` (seu e-mail de login; separe vários por vírgula). Depois `docker compose up -d` para recriar o container.
-- Não há webhook: os pagamentos são conferidos por consulta ao Mercado Pago (na volta do pagamento, no botão Atualizar e pelo worker periódico).
+- Como no Adapter Connect: no cadastro o cliente escolhe o plano e paga na mesma tela, por **Pix** (QR Code e copia-e-cola) ou **cartão de crédito/débito** (formulário seguro do Mercado Pago — o OmniHub nunca vê o número do cartão). Conta sem pagamento confirmado não tem acesso (não há teste grátis). Cada pagamento vale um mês, sem dias de tolerância; 7 dias antes do vencimento aparece a próxima mensalidade em **Assinatura**.
+- No `.env`: `PLATFORM_MP_ACCESS_TOKEN` (Access Token da conta Mercado Pago que recebe), `PLATFORM_MP_PUBLIC_KEY` (chave pública da mesma aplicação; sem ela, só Pix) e `PLATFORM_ADMIN_EMAILS` (seu e-mail de login; separe vários por vírgula). Depois `docker compose up -d` para recriar o container.
+- Não há webhook: a tela consulta o Mercado Pago a cada 5 s enquanto o cliente paga, e o worker confere sozinho.
 - Em **Plataforma**: cadastre os planos (nome, preço mensal, limite de lojas) — nenhum vem pré-cadastrado — e o limite de lojas das contas dos administradores (que não pagam).
-- `SUBSCRIPTION_WORKER_INTERVAL_MS` (padrão 300000; 0 desliga) é o intervalo da consulta periódica (primeiros pagamentos e renovações).
+- `SUBSCRIPTION_WORKER_INTERVAL_MS` (padrão 300000; 0 desliga) é o intervalo da consulta periódica (pagamentos em andamento, renovações e vencimentos).
 
 ## Próxima etapa
 
-1. Validar os planos com a conta Mercado Pago real (sandbox primeiro): assinatura, primeiro pagamento, renovação e cancelamento.
+1. Validar os planos com a conta Mercado Pago real (credenciais de teste primeiro): Pix, cartão, renovação e cancelamento.
 2. Restrição por loja em `lib/catalog`/`lib/inventory` (já existe em `lib/cash`/`lib/sales`); login comercial independente para clientes finais.
 3. Validar a transmissão de NF-e (Fase 5, Marco 3) contra o serviço real da SEFAZ de Homologação com certificado A1 de teste, confirmando a estrutura do envelope SOAP contra o MOC 7.00 Anexo II antes de qualquer emissão real.
 4. Fase 6 (expandir NF-e: múltiplos produtos/clientes, rejeições, cancelamento fiscal, inutilização, DANFE) e Fase 7 (NFC-e modelo 65); testar concorrência e isolamento com volume antes do lançamento comercial.

@@ -1,10 +1,10 @@
-import { reconcileOpenSubscriptions, subscriptionDepsFromEnv } from './service.ts';
+import { runSubscriptionCycle, subscriptionDepsFromEnv } from './service.ts';
 import { logger } from '../log.ts';
 
-// Consulta periódica das assinaturas da plataforma ao Mercado Pago (não há webhook): primeiro
-// pagamento, renovação mensal, criação com resposta incerta e expiração das contas cujo período
-// pago terminou. Mesmo padrão dos outros workers: laço em processo, sem sobreposição, falha de um
-// ciclo não derruba o servidor.
+// Ciclo periódico dos planos (não há webhook): confere no Mercado Pago os pagamentos em andamento,
+// gera a fatura de renovação perto do vencimento e expira as contas cujo período pago terminou.
+// Mesmo padrão dos outros workers: laço em processo, sem sobreposição, falha de um ciclo não
+// derruba o servidor.
 // SUBSCRIPTION_WORKER_INTERVAL_MS: intervalo em ms (padrão 300000; 0 desliga).
 const DEFAULT_INTERVAL_MS = 300_000;
 
@@ -26,8 +26,8 @@ export function startSubscriptionWorker(db: D1Database, env: Record<string, stri
         if (running) return;
         running = true;
         try {
-            const result = await reconcileOpenSubscriptions(db, client);
-            if (result.checked > 0) logger.info('subscription-worker.ciclo', result);
+            const result = await runSubscriptionCycle(db, client);
+            if (result.checked > 0 || result.renewals > 0) logger.info('subscription-worker.ciclo', result);
         } catch (error) {
             logger.error('subscription-worker.ciclo_falhou', { error });
         } finally {

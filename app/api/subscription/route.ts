@@ -2,29 +2,26 @@ import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
 import { RuleError } from '@/lib/domain';
-import { cancelAccountSubscription, getSubscriptionPage, refreshAccountSubscription, startSubscription, subscriptionDepsFromEnv } from '@/lib/subscriptions/service';
+import { cancelRenewal, checkInvoice, choosePlan, getSubscriptionPage, payInvoice, subscriptionDepsFromEnv } from '@/lib/subscriptions/service';
 import { readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
 import { logger } from '@/lib/log';
 
 export const dynamic = 'force-dynamic';
 const reply = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store' } });
 
-// Assinatura da conta (tela "Assinatura"): planos disponíveis, situação, assinar (devolve o link
-// de pagamento do Mercado Pago) e cancelar. Não exige acesso vigente — é por aqui que se regulariza.
-async function view(tenantId: string, plan: { status: string; accessUntil: number; maxStores: number }) {
- return { ...(await getSubscriptionPage(database(), tenantId)), access: plan };
-}
-
+// Plano da conta (modelo do Adapter Connect): escolher o plano e pagar na tela por Pix ou cartão.
+// Não exige acesso vigente — é por aqui que se ativa ou regulariza.
 export async function GET(request: Request) {
  try {
   const session = await resolveWorkspaceSession();
   if (!session) return reply({ error: 'Entre na sua conta.', signIn: true }, 401);
-  if (new URL(request.url).searchParams.get('refresh') === '1') {
-   await refreshAccountSubscription(database(), session.tenantId, subscriptionDepsFromEnv());
+  const invoiceId = new URL(request.url).searchParams.get('invoice');
+  if (invoiceId) {
+   const invoice = await checkInvoice(database(), session.tenantId, invoiceId, subscriptionDepsFromEnv());
    const fresh = await resolveWorkspaceSession();
-   if (fresh) return reply(await view(fresh.tenantId, fresh.plan));
+   return reply({ invoice, access: fresh?.plan ?? session.plan });
   }
-  return reply(await view(session.tenantId, session.plan));
+  return reply({ ...(await getSubscriptionPage(database(), session.tenantId)), access: session.plan });
  } catch (error) {
   if (error instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
@@ -38,18 +35,14 @@ export async function POST(request: Request) {
   if (!isSameOrigin(request)) return reply({ error: 'Origem inválida.' }, 403);
   const session = await resolveWorkspaceSession();
   if (!session) return reply({ error: 'Entre na sua conta.', signIn: true }, 401);
-  const body = await readJsonLimited<{ action?: unknown; planId?: unknown; payerEmail?: unknown }>(request, 4 * 1024);
+  const body = await readJsonLimited<Record<string, unknown>>(request, 8 * 1024);
   if (!body) return reply({ error: 'Dados inválidos.' }, 400);
   const db = database();
-  const deps = subscriptionDepsFromEnv();
-  if (body.action === 'start') {
-   const result = await startSubscription(db, session.tenantId, session.actor, { planId: body.planId, payerEmail: body.payerEmail }, deps);
-   return reply({ initPoint: result.initPoint });
-  }
+  if (body.action === 'choose') return reply({ invoice: await choosePlan(db, session.tenantId, session.actor, body.planId) });
+  if (body.action === 'pay') return reply(await payInvoice(db, session.tenantId, String(body.invoiceId ?? ''), body, subscriptionDepsFromEnv()));
   if (body.action === 'cancel') {
-   await cancelAccountSubscription(db, session.tenantId, session.actor, deps);
-   const fresh = await resolveWorkspaceSession();
-   return reply(await view(session.tenantId, fresh?.plan ?? session.plan));
+   await cancelRenewal(db, session.tenantId, session.actor);
+   return reply({ ok: true });
   }
   return reply({ error: 'Ação inválida.' }, 400);
  } catch (error) {

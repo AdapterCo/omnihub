@@ -13,9 +13,12 @@ export function proxy(request: NextRequest) {
   "default-src 'self'",
   `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "connect-src 'self'",
+  // Formulário de cartão do Mercado Pago (Card Payment Brick, pagamento do plano): SDK carregado por
+  // script confiável ('strict-dynamic'), campos seguros em iframe e chamadas às APIs deles.
+  "img-src 'self' data: blob: https://*.mercadopago.com https://*.mlstatic.com https://*.mercadolibre.com https://*.mercadolivre.com",
+  "font-src 'self' data: https://*.mlstatic.com",
+  "connect-src 'self' https://*.mercadopago.com https://*.mercadolibre.com https://*.mercadolivre.com https://*.mlstatic.com",
+  "frame-src https://*.mercadopago.com https://*.mercadolibre.com https://*.mercadolivre.com",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
