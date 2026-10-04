@@ -195,7 +195,7 @@ export function SignupWithPlan({ onRegistered, onLogin }: { onRegistered: () => 
  const available = options.billingReady && options.plans.length > 0;
  return <div className="stack">
   {available ? <div className="cards">{options.plans.map((p) => <PlanCard key={p.id} plan={p} selected={p.id === planId} onSelect={() => setPlanId(p.id)} />)}</div>
-   : <p className="notice">A contratação online está indisponível no momento. Tente mais tarde.</p>}
+   : <p className="notice">{options.billingReady ? 'Nenhum plano disponível no momento.' : 'A contratação online está indisponível no momento.'} Tente mais tarde.</p>}
   <p className="muted mb-0">Sem plano grátis. A conta é ativada após o pagamento confirmado.</p>
   <form className="form-grid" onSubmit={(e) => void submit(e)}>
    {available && <label className="field full">Plano<select required value={planId} onChange={(e) => setPlanId(e.target.value)}><option value="">Escolha o plano</option>{options.plans.map((p) => <option key={p.id} value={p.id}>{p.name} - {money(p.priceCents)}/mês</option>)}</select></label>}

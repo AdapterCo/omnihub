@@ -63,8 +63,10 @@ function mockMercadoPago() {
     };
 }
 
-async function fixture(email = 'dona@cliente.test') {
+async function fixture(email = 'dona@cliente.test', keepDefaultPlans = false) {
     const db = createFakeD1();
+    // Os testes de regra cadastram os próprios planos; os planos padrão têm teste dedicado abaixo.
+    if (!keepDefaultPlans) await db.prepare('DELETE FROM platform_plans').bind().run();
     const reg = await registerAccount(db, { accountName: 'Loja MOCK', displayName: 'Dona', email, password: 'Test-only-password-123' }, T0);
     const owner = { userId: reg.userId, displayName: 'Dona', role: 'admin', storeId: null, permissions: permissionsForRole('OWNER') };
     const mp = mockMercadoPago();
@@ -84,6 +86,16 @@ test('conta nova nasce sem acesso e sem lojas; nada funciona até pagar', async 
     assert.deepEqual([ent.status, ent.accessUntil, ent.maxStores, ent.platform], ['none', 0, 0, false]);
     assert.throws(() => requireActive(ent, T0), /Escolha um plano/);
     await assert.rejects(() => dispatchCommand(f.db, f.tenantId, f.owner, ent, { type: 'store.create', data: { name: 'Loja 1' } } as never, T0), /Escolha um plano/);
+});
+
+test('planos padrão já prontos: Essencial R$ 49,90/1 loja, Profissional R$ 89,90/3, Empresarial R$ 199,90/10', async () => {
+    const f = await fixture('dona@cliente.test', true);
+    const plans = await listPlatformPlans(f.db, { onlyActive: true });
+    assert.deepEqual(plans.map((p) => [p.name, p.priceCents, p.maxStores]).sort((a, b) => Number(a[1]) - Number(b[1])), [['Essencial', 4990, 1], ['Profissional', 8990, 3], ['Empresarial', 19990, 10]]);
+    assert.equal((await getSignupOptions(f.db, ENV)).plans.length, 3);
+    // Já dá para escolher e pagar.
+    const invoice = await choosePlan(f.db, f.tenantId, f.owner, 'plano-profissional', T0);
+    assert.deepEqual([invoice.planName, invoice.amountCents, invoice.maxStores], ['Profissional', 8990, 3]);
 });
 
 test('planos: só o administrador da plataforma cadastra; nenhum plano pré-cadastrado; validações', async () => {
