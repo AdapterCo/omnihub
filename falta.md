@@ -346,6 +346,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Pagamento do plano na própria tela: Pix ou cartão (2026-10-04)** | **Concluído (falta validar com a conta real)** | Como no Adapter Connect: escolher o plano e pagar na mesma tela por Pix (QR Code/copia-e-cola) ou cartão de crédito/débito (formulário seguro do Mercado Pago, exige `PLATFORM_MP_PUBLIC_KEY`). Faturas mensais (`platform_invoices`) via `/v1/payments`, confirmação só por consulta, renovação 7 dias antes, Pix de fatura substituída ainda creditado. Pendente: pagamento real e formulário de cartão com a chave pública real. |
 | **Planos padrão já prontos (2026-10-04)** | **Concluído** | Essencial R$ 49,90/1 loja, Profissional R$ 89,90/3 lojas, Empresarial R$ 199,90/10 lojas criados por migração (`0017_default_plans.sql`); o cadastro em produção passa a mostrar os planos assim que o deploy rodar a migração. |
 | **Nota fiscal e cupom fiscal ocultos na tela (2026-10-10)** | **Concluído** | Tudo de NF-e/NFC-e escondido na interface por `SHOW_FISCAL=false` (`app/workspace.tsx`); comprovante não fiscal mantido; backend fiscal intacto e reativável. |
+| **Nova identidade visual (2026-10-10)** | **Concluído** | Tema "balcão de loja" (verde-balcão, amarelo-etiqueta, Bricolage Grotesque + Public Sans), visor de caixa e etiquetas de preço no PDV, indicadores em faixa única, correções de estilo em selects e no login. |
 
 ---
 
