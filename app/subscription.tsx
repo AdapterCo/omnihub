@@ -156,7 +156,7 @@ export function PaymentPanel({ invoice, checkout, defaultPayerEmail, onPaid }: {
 }
 
 function PlanCard({ plan, selected, onSelect }: { plan: Plan; selected: boolean; onSelect: () => void }) {
- return <button type="button" onClick={onSelect} className="panel p-4 stack text-left" style={{ cursor: 'pointer', borderColor: selected ? 'var(--primary, #2563eb)' : undefined, boxShadow: selected ? '0 0 0 2px var(--primary, #2563eb)' : undefined }}>
+ return <button type="button" onClick={onSelect} className="panel p-4 stack text-left" style={{ cursor: 'pointer', borderColor: selected ? 'var(--primary)' : undefined, boxShadow: selected ? '0 0 0 2px var(--primary)' : undefined }}>
   <div className="split"><strong>{plan.name}</strong>{selected && <span className="badge">Escolhido</span>}</div>
   {plan.description && <span className="muted">{plan.description}</span>}
   <span className="text-2xl font-semibold">{money(plan.priceCents)}<small className="muted"> /mês</small></span>

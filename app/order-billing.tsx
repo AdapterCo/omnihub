@@ -104,7 +104,7 @@ export function BillingOverview({onOpenOrder}:{onOpenOrder:(orderId:string)=>voi
  }
  const t:Totals=data?.totals??{overdueAmount:0,overdueCount:0,delinquentCustomers:0,upcomingAmount:0,upcomingCount:0,openAmount:0,paidAmount:0,paidCount:0,allCount:0,needsReview:0};
  const active=FILTERS.find(f=>f.key===filter)??FILTERS[0];
- const card=(label:string,value:string,hint:string,tone='')=><section className="metric"><span>{label}</span><strong style={tone==='error'?{color:'#a52431'}:tone==='success'?{color:'#13734f'}:undefined}>{value}</strong><small>{hint}</small></section>;
+ const card=(label:string,value:string,hint:string,tone='')=><section className="metric"><span>{label}</span><strong style={tone==='error'?{color:'#9b1f18'}:tone==='success'?{color:'#0b5a46'}:undefined}>{value}</strong><small>{hint}</small></section>;
  return <>
   {error&&<p role="alert" className="notice error">{error}</p>}
   <div className="metrics">

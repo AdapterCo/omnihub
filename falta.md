@@ -347,6 +347,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Planos padrão já prontos (2026-10-04)** | **Concluído** | Essencial R$ 49,90/1 loja, Profissional R$ 89,90/3 lojas, Empresarial R$ 199,90/10 lojas criados por migração (`0017_default_plans.sql`); o cadastro em produção passa a mostrar os planos assim que o deploy rodar a migração. |
 | **Nota fiscal e cupom fiscal ocultos na tela (2026-10-10)** | **Concluído** | Tudo de NF-e/NFC-e escondido na interface por `SHOW_FISCAL=false` (`app/workspace.tsx`); comprovante não fiscal mantido; backend fiscal intacto e reativável. |
 | **Nova identidade visual (2026-10-10)** | **Concluído** | Tema "balcão de loja" (verde-balcão, amarelo-etiqueta, Bricolage Grotesque + Public Sans), visor de caixa e etiquetas de preço no PDV, indicadores em faixa única, correções de estilo em selects e no login. |
+| **Novo visual aplicado em todas as telas (2026-10-10)** | **Concluído** | Campos soltos, alinhamentos, cores antigas, botões duplicados, Limites de desconto e nomes de papel ajustados em todas as abas. Pendente à parte: validação de cliente responde 503 em vez de 400. |
 
 ---
 
