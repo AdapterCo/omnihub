@@ -67,7 +67,7 @@ export function OrderBilling({order,perms,active,refresh}:{order:OrderView;perms
      {label(closure==='RETURN'?'Avaliação presencial do aparelho':'Registro da opção de compra',<textarea required minLength={5} maxLength={2000} value={assessment} onChange={e=>setAssessment(e.target.value)}/>)}
      {closure==='RETURN'&&label('Orçamento exato de avarias (R$); 0 se não houver',<input required value={damage} onChange={e=>setDamage(e.target.value)} inputMode="decimal"/>)}
      {label('Vencimento do boleto de avarias ou compra residual',<input type="date" value={extraDue} onChange={e=>setExtraDue(e.target.value)}/>)}
-     <p className="muted full">Devolução preserva mensalidades vencidas e cancela futuras ainda não pagas. Compra exige quitação da adesão, das 12 mensalidades e dos R$ 19,90. Nenhuma nota fiscal, remoção de iCloud ou negativação é executada por esta ação.</p>
+     <p className="muted full">Devolução preserva mensalidades vencidas e cancela futuras ainda não pagas. Compra exige quitação da adesão, das 12 mensalidades e dos R$ 19,90. Nenhuma remoção de iCloud ou negativação é executada por esta ação.</p>
      <Button disabled={busy||!active} type="submit">Confirmar / retomar encerramento</Button>
     </form>}
    </>}
