@@ -89,6 +89,35 @@ function clientFor(config: ConfigRow, deps: SignatureDeps) {
  return new AdapterSignClient(decryptSecret(config.apiKeyEnc), deps.fetch, deps.baseUrl || (process.env.ADAPTER_SIGN_BASE_URL ?? '').trim() || ADAPTER_SIGN_API);
 }
 
+export type SignTemplateOption = { key: string; name: string; description: string; roles: { key: string; label: string; isCompany: boolean }[]; companyRole: string | null; clientRole: string | null; problem: string | null };
+
+/**
+ * Modelos de assinatura do Adapter Sign da loja, para o lojista escolher no modelo de contrato.
+ * Serve o modelo com exatamente um papel da empresa e um outro papel (o cliente); os demais vêm
+ * com o motivo (testemunhas e outros papéis não são preenchidos pelo OmniHub).
+ */
+export async function listSignatureTemplates(db: D1Database, tenantId: string, storeId: string, actor: Actor, deps: SignatureDeps): Promise<SignTemplateOption[]> {
+ requirePermission(actor.permissions, 'SIGNATURE_CONFIG');
+ requireStoreAccess(actor, storeId);
+ const config = await loadConfig(db, tenantId, storeId);
+ if (!config) throw new RuleError('Configure primeiro a assinatura eletrônica desta loja (Minhas lojas > Assinatura eletrônica): o OmniHub usa a API key do Adapter Sign para buscar os modelos.', 409);
+ let templates;
+ try {
+  templates = await clientFor(config, deps).listTemplates();
+ } catch (error) {
+  if (error instanceof AdapterSignError) throw new RuleError(`Não foi possível buscar os modelos no Adapter Sign: ${friendlySignError(error)}`, error.status === 0 || error.status >= 500 ? 503 : 422);
+  throw error;
+ }
+ return templates.map((t) => {
+  const company = t.roles.filter((r) => r.isCompany);
+  const others = t.roles.filter((r) => !r.isCompany);
+  const problem = company.length !== 1 ? 'precisa ter exatamente um papel da empresa (marcado como "empresa" no Adapter Sign)'
+   : others.length !== 1 ? `precisa ter só um papel além da empresa (o do cliente); este tem ${others.length}: ${others.map((r) => r.label).join(', ') || 'nenhum'}`
+   : null;
+  return { key: t.key, name: t.name, description: t.description, roles: t.roles.map((r) => ({ key: r.key, label: r.label, isCompany: r.isCompany })), companyRole: problem ? null : company[0].key, clientRole: problem ? null : others[0].key, problem };
+ });
+}
+
 type ContractRow = {
  id: string; tenantId: string; storeId: string; orderId: string; customerId: string; contractType: 'VENDA' | 'LOCACAO'; templateKey: string; revision: number;
  externalRef: string; status: string; adapterStatus: string; envelopeId: string | null; validationCode: string | null; originalDocumentId: string;
@@ -123,12 +152,12 @@ export function friendlySignError(error: AdapterSignError, templateKey = ''): st
    const list = (x: unknown) => (Array.isArray(x) ? x.filter((k): k is string => typeof k === 'string').map((k) => `"${k}"`).join(', ') : '');
    const missing = list(d.missing), unknown = list(d.unknown);
    const roles = missing || unknown
-    ? ` O modelo "${templateKey}" no Adapter Sign precisa ter exatamente os papéis "loja" (empresa, ordem 1) e "cliente" (ordem 2).${missing ? ` Papéis do modelo sem correspondência: ${missing}.` : ''}${unknown ? ` Papéis enviados que o modelo não tem: ${unknown}.` : ''}`
+    ? ` O modelo "${templateKey}" no Adapter Sign precisa ter exatamente dois papéis: o da empresa (assina primeiro) e o do cliente. Se o modelo mudou, escolha-o de novo em Minhas lojas > Modelos de contrato.${missing ? ` Papéis do modelo sem correspondência: ${missing}.` : ''}${unknown ? ` Papéis enviados que o modelo não tem: ${unknown}.` : ''}`
     : '';
    return `O Adapter Sign recusou os dados: ${error.message}${roles}${ref}`;
   }
   case 'TEMPLATE_NOT_FOUND': return `Modelo "${templateKey}" não encontrado (ou arquivado) no Adapter Sign. Confira o identificador em Minhas lojas > Assinatura eletrônica.${ref}`;
-  case 'TEMPLATE_ANCHORS_MISMATCH': return `O PDF do contrato não tem os marcadores esperados pelo modelo no Adapter Sign (papéis "loja" e "cliente"). Nada foi criado.${ref}`;
+  case 'TEMPLATE_ANCHORS_MISMATCH': return `O PDF do contrato não tem os marcadores esperados pelo modelo no Adapter Sign (os papéis do PDF e do modelo não batem). Gere o contrato de novo depois de conferir o modelo de assinatura escolhido. Nada foi criado.${ref}`;
   case 'COMPANY_SIGNATURE_NOT_AUTHORIZED': return `A loja ainda não autorizou a assinatura da empresa pela integração. O proprietário precisa aceitar em Adapter Sign → Configurações → Assinatura da empresa.${ref}`;
   case 'TEMPLATE_ORDER_UNSUPPORTED': return `No modelo do Adapter Sign, o papel da loja precisa vir antes do cliente.${ref}`;
   case 'PLAN_LIMIT_REACHED': return `Limite do plano do Adapter Sign atingido.${ref}`;
@@ -154,8 +183,12 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
  if (!['GENERATED', 'SENDING'].includes(contract.status)) throw new RuleError(contract.status === 'SUPERSEDED' ? 'Este contrato foi substituído por uma revisão mais nova.' : 'Este contrato já foi enviado para assinatura.', 409);
  const config = await loadConfig(db, tenantId, contract.storeId);
  if (!config) throw new RuleError('Assinatura eletrônica não configurada nesta loja (Minhas lojas > Assinatura eletrônica).', 409);
- const templateKey = contract.contractType === 'VENDA' ? config.motoTemplate : config.locacaoTemplate;
- if (!templateKey) throw new RuleError(`Informe o identificador do modelo de ${contract.contractType === 'VENDA' ? 'moto' : 'locação'} do Adapter Sign em Minhas lojas > Assinatura eletrônica.`, 409);
+ // Contrato gerado por modelo da loja guarda o modelo de assinatura e os papéis escolhidos; os
+ // contratos dos modelos do código usam a configuração da loja e os papéis "loja"/"cliente".
+ const snapshotTemplate = (JSON.parse(contract.payloadSnapshot) as { template?: { signTemplateKey?: string | null; signatureRoles?: { company: string; client: string } | null } }).template ?? {};
+ const roles = snapshotTemplate.signTemplateKey && snapshotTemplate.signatureRoles ? snapshotTemplate.signatureRoles : { company: 'loja', client: 'cliente' };
+ const templateKey = snapshotTemplate.signTemplateKey || (contract.contractType === 'VENDA' ? config.motoTemplate : config.locacaoTemplate);
+ if (!templateKey) throw new RuleError(`Escolha o modelo de assinatura do Adapter Sign no modelo de contrato da loja (Minhas lojas > Modelos de contrato) ou informe o de ${contract.contractType === 'VENDA' ? 'moto' : 'locação'} em Minhas lojas > Assinatura eletrônica.`, 409);
 
  // Representante da loja: quem envia pela primeira vez (retentativas mantêm o mesmo).
  let seller = contract.sentBy ? { id: contract.sentBy, name: contract.sentByName ?? '', email: contract.sentByEmail ?? '' } : null;
@@ -169,7 +202,7 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
  const v = snapshot.values;
  const customer = await db.prepare('SELECT phone FROM customers WHERE id = ? AND tenant_id = ?').bind(contract.customerId, tenantId).first<{ phone: string }>();
  const phoneDigits = digits(customer?.phone ?? '');
- const clientSigner: { role: string; name: string; email: string; cpf?: string; phone?: string } = { role: 'cliente', name: v['cliente.nome'], email: v['cliente.email'] };
+ const clientSigner: { role: string; name: string; email: string; cpf?: string; phone?: string } = { role: roles.client, name: v['cliente.nome'], email: v['cliente.email'] };
  if (v['cliente.cpf']) clientSigner.cpf = v['cliente.cpf'];
  // Telefone com DDD (10/11 dígitos) → convite e código também pelo WhatsApp, conforme a integração.
  if (phoneDigits.length === 10 || phoneDigits.length === 11) clientSigner.phone = `+55${phoneDigits}`;
@@ -189,10 +222,10 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
    template: templateKey,
    externalRef: contract.externalRef,
    title,
-   signers: [{ role: 'loja', name: seller.name, email: seller.email, externalId: seller.id }, clientSigner],
+   signers: [{ role: roles.company, name: seller.name, email: seller.email, externalId: seller.id }, clientSigner],
   });
-  const loja = sent.signers.find((s) => s.role === 'loja');
-  const cliente = sent.signers.find((s) => s.role === 'cliente');
+  const loja = sent.signers.find((s) => s.role === roles.company);
+  const cliente = sent.signers.find((s) => s.role === roles.client);
   const status = cliente?.status === 'SIGNED' || sent.status === 'COMPLETED' ? 'CLIENT_SIGNED' : 'SENT';
   await db
    .prepare('UPDATE contracts SET internal_status = ?, adapter_status = ?, envelope_id = ?, validation_code = ?, adapter_document_id = ?, signer_loja_id = ?, signer_cliente_id = ?, last_error = ?, sent_at = COALESCE(sent_at, ?), updated_at = ? WHERE id = ?')

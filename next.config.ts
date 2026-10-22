@@ -33,6 +33,9 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Leitura do PDF dos modelos de contrato (lib/contracts/extract.ts): o pdfjs carrega o próprio
+  // worker e as fontes padrão do node_modules em tempo de execução; empacotado pelo Next, quebra.
+  serverExternalPackages: ["pdfjs-dist"],
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },

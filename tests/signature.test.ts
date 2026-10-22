@@ -206,7 +206,7 @@ test('envio bloqueia sem configuração, sem modelo, sem e-mail do vendedor; rec
     const c = await f.newContract();
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /não configurada/);
     await saveSignatureConfig(f.db, f.tenantId, f.store, { apiKey: API_KEY, webhookSecret: WEBHOOK_SECRET, locacaoTemplate: 'contrato-locacao' }, f.owner, NOW);
-    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /identificador do modelo de moto/);
+    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /Escolha o modelo de assinatura .* ou informe o de moto em Minhas lojas > Assinatura eletrônica/);
     await saveSignatureConfig(f.db, f.tenantId, f.store, { motoTemplate: 'contrato-moto', locacaoTemplate: '' }, f.owner, NOW);
     const noEmailId = await addMember(f.db, f.tenantId, { email: null, roleId: 'ROLE_VENDEDOR_ONLINE', name: 'Sem Email' });
     const noEmail = await actorFor(f.db, f.tenantId, noEmailId, 'operator', 'Sem Email');
@@ -349,7 +349,7 @@ test('recusa por papéis do modelo explica quais papéis faltam ou sobram', asyn
  const { AdapterSignError } = await import('../lib/signature/adapterSign.ts');
  // Formato devolvido pelo Adapter Sign (contracts.service.ts): details { missing, unknown }.
  const msg = friendlySignError(new AdapterSignError(422, 'VALIDATION_ERROR', 'Informe exatamente um signatário para cada papel do modelo.', 'req-1', { missing: ['comprador'], unknown: ['cliente'] }), 'contrato-moto');
- assert.match(msg, /"loja" \(empresa, ordem 1\) e "cliente"/);
+ assert.match(msg, /exatamente dois papéis: o da empresa \(assina primeiro\) e o do cliente/);
  assert.match(msg, /sem correspondência: "comprador"/);
  assert.match(msg, /modelo não tem: "cliente"/);
  assert.match(msg, /código req-1/);

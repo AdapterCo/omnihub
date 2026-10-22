@@ -23,7 +23,7 @@ type Segment = { text: string; style: Style };
 type Word = Segment[];
 type Fonts = Record<'regular' | 'bold' | 'italic' | 'boldItalic', PDFFont>;
 
-export const signatureMarker = (role: 'loja' | 'cliente') => `[[AS:assinatura:${role}]]`;
+export const signatureMarker = (role: string) => `[[AS:assinatura:${role}]]`;
 
 /** Quebra o texto do modelo em trechos com estilo e substitui os placeholders por valores literais. */
 export function toSegments(templateText: string, values: Record<string, string>): Segment[] {
@@ -143,7 +143,7 @@ class Writer {
   return out;
  }
 
- signature(role: 'loja' | 'cliente', label: Segment[], size: number) {
+ signature(role: string, label: Segment[], size: number) {
   this.ensure(80);
   this.y -= 36;
   const lineWidth = 300;
@@ -169,6 +169,50 @@ function assertEncodable(fonts: Fonts, values: Record<string, string>, labels: R
  if (bad.length) throw new RuleError(`Não foi possível gerar o contrato: há caracteres não suportados em ${bad.join(', ')}. Corrija o cadastro (emojis e símbolos especiais não são aceitos).`, 400);
 }
 
+/** Texto do MODELO da loja (importado de PDF) com caractere fora da fonte: explica qual, para corrigir no editor. */
+function assertTemplateEncodable(fonts: Fonts, template: ContractTemplate) {
+ const texts = [...template.blocks.map((b) => ('text' in b ? b.text : 'label' in b ? b.label : '')), template.page?.headerText ?? '', template.page?.footerText ?? ''];
+ const bad = new Set<string>();
+ for (const ch of new Set(texts.join(''))) {
+  if (ch === '\n') continue;
+  try { fonts.regular.encodeText(ch); } catch { bad.add(ch); }
+ }
+ if (bad.size) throw new RuleError(`O texto do modelo tem caracteres que o PDF não suporta: ${[...bad].map((c) => `"${c}"`).join(' ')}. Troque por letras comuns no editor do modelo.`, 400);
+}
+
+const FOOTER_SIZE = 7.5;
+const HEADER_SIZE = 8.5;
+
+/** Logo e cabeçalho da empresa no topo da 1ª página; devolve a altura usada. */
+async function drawHeader(doc: PDFDocument, w: Writer, page: NonNullable<ContractTemplate['page']>, values: Record<string, string>) {
+ const top = PAGE.height - 40;
+ let x = MARGIN.left;
+ let bottom = top;
+ if (page.logo) {
+  const image = page.logo.mime === 'image/png' ? await doc.embedPng(page.logo.bytes) : await doc.embedJpg(page.logo.bytes);
+  const scale = Math.min(150 / image.width, 56 / image.height, 1);
+  const lw = image.width * scale, lh = image.height * scale;
+  w.page.drawImage(image, { x, y: top - lh, width: lw, height: lh });
+  x += lw + 14;
+  bottom = Math.min(bottom, top - lh);
+ }
+ const lines = page.headerText.split('\n').map((l) => l.trim()).filter(Boolean);
+ let y = top - HEADER_SIZE;
+ lines.forEach((line, i) => {
+  // 1ª linha do cabeçalho (nome da empresa) em negrito, como nos contratos de origem.
+  const segments = i === 0 && !line.includes('**') ? [{ text: fillText(line, values), style: { bold: true, italic: false } }] : toSegments(line, values);
+  let cx = x;
+  for (const seg of segments) {
+   const font = fontFor(w.fonts, seg.style);
+   w.page.drawText(seg.text, { x: cx, y, size: HEADER_SIZE, font, color: BLACK });
+   cx += font.widthOfTextAtSize(seg.text, HEADER_SIZE);
+  }
+  y -= HEADER_SIZE * 1.4;
+ });
+ bottom = Math.min(bottom, y + HEADER_SIZE * 0.4);
+ w.y = Math.min(w.y, bottom - 18);
+}
+
 export async function renderContractPdf(template: ContractTemplate, values: Record<string, string>, meta: { title: string; now: number; clientInitials?: boolean }): Promise<Uint8Array> {
  const doc = await PDFDocument.create();
  const fonts: Fonts = {
@@ -178,6 +222,8 @@ export async function renderContractPdf(template: ContractTemplate, values: Reco
   boldItalic: await doc.embedFont(StandardFonts.HelveticaBoldOblique),
  };
  assertEncodable(fonts, values, Object.fromEntries(template.required.map((r) => [r.key, r.label])));
+ if (template.page) assertTemplateEncodable(fonts, template);
+ const roles = template.signatureRoles ?? { company: 'loja', client: 'cliente' };
  doc.setTitle(meta.title);
  doc.setProducer('OmniHub');
  doc.setCreator('OmniHub');
@@ -185,6 +231,7 @@ export async function renderContractPdf(template: ContractTemplate, values: Reco
  doc.setModificationDate(new Date(meta.now));
  const s = template.style;
  const w = new Writer(doc, fonts);
+ if (template.page) await drawHeader(doc, w, template.page, values);
  for (const block of template.blocks) {
   if (block.kind === 'title') {
    w.paragraph([{ text: fillText(block.text, values), style: { bold: s.titleBold, italic: false } }], { size: s.titleSize, align: s.titleAlign, after: 14 });
@@ -200,13 +247,24 @@ export async function renderContractPdf(template: ContractTemplate, values: Reco
    const bulletY = w.y - size * 1.45;
    w.page.drawText('•', { x: MARGIN.left + 8, y: bulletY, size, font: fonts.regular, color: BLACK });
    w.paragraph(toSegments(block.text, values), { size, x: MARGIN.left + 22, width: CONTENT_WIDTH - 22, justify: false, after: 1 });
+  } else if (block.kind === 'item') {
+   // Item numerado de lista ("1. Calibragem do pneu;"): recuado, o número faz parte do texto.
+   w.paragraph(toSegments(block.text, values), { size: s.bodySize, x: MARGIN.left + 18, width: CONTENT_WIDTH - 18, justify: s.justify, after: 2 });
   } else if (block.kind === 'space') {
    w.y -= block.size ?? 8;
   } else if (block.kind === 'signature') {
-   w.signature(block.role, toSegments(block.label, values), s.bodySize);
+   w.signature(block.role === 'loja' ? roles.company : roles.client, toSegments(block.label, values), s.bodySize);
   }
  }
- if (s.pageNumbers) {
+ if (template.page) {
+  // Rodapé da loja + "Página 01" em todas as páginas (como nos contratos de origem).
+  const footer = template.page.footerText.trim() ? toSegments(template.page.footerText.trim(), values).map((x) => x.text).join('') : '';
+  w.pages.forEach((page, i) => {
+   const label = `Página ${String(i + 1).padStart(2, '0')}`;
+   if (footer) page.drawText(footer.slice(0, 160), { x: MARGIN.left, y: 30, size: FOOTER_SIZE, font: fonts.regular, color: BLACK });
+   page.drawText(label, { x: PAGE.width - MARGIN.right - fonts.regular.widthOfTextAtSize(label, FOOTER_SIZE), y: 30, size: FOOTER_SIZE, font: fonts.regular, color: BLACK });
+  });
+ } else if (s.pageNumbers) {
   w.pages.forEach((page, i) => {
    const label = String(i + 1);
    page.drawText(label, { x: PAGE.width - MARGIN.right - fonts.regular.widthOfTextAtSize(label, 9), y: MARGIN.bottom / 2, size: 9, font: fonts.regular, color: BLACK });
@@ -215,7 +273,7 @@ export async function renderContractPdf(template: ContractTemplate, values: Reco
  if(meta.clientInitials) {
   for(const page of w.pages) {
    // Área reservada do rodapé, fora do texto e da numeração. Âncora real por página.
-   page.drawText('[[AS:rubrica:cliente]]',{x:MARGIN.left,y:40,size:MARKER_SIZE,font:fonts.regular,color:WHITE});
+   page.drawText(`[[AS:rubrica:${roles.client}]]`,{x:MARGIN.left,y:40,size:MARKER_SIZE,font:fonts.regular,color:WHITE});
   }
  }
  return doc.save({ useObjectStreams: false });

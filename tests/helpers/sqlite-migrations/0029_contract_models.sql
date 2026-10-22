@@ -1,0 +1,32 @@
+-- Dublê SQLite de drizzle/0018_contract_models.sql.
+CREATE TABLE contract_models (
+	id text PRIMARY KEY NOT NULL,
+	tenant_id text NOT NULL REFERENCES accounts(id),
+	store_id text NOT NULL REFERENCES stores(id),
+	order_type text NOT NULL,
+	name text NOT NULL,
+	version integer NOT NULL,
+	status text NOT NULL,
+	title text DEFAULT '' NOT NULL,
+	header_text text DEFAULT '' NOT NULL,
+	body text DEFAULT '' NOT NULL,
+	footer_text text DEFAULT '' NOT NULL,
+	logo_key text,
+	logo_mime text,
+	warranty_days integer,
+	fine_bp integer,
+	interest_bp integer,
+	residual_cents integer,
+	sign_template_key text DEFAULT '' NOT NULL,
+	sign_company_role text DEFAULT '' NOT NULL,
+	sign_client_role text DEFAULT '' NOT NULL,
+	client_initials integer DEFAULT 0 NOT NULL,
+	source_filename text DEFAULT '' NOT NULL,
+	created_by text NOT NULL,
+	created_by_name text DEFAULT '' NOT NULL,
+	created_at integer NOT NULL,
+	updated_at integer NOT NULL,
+	published_at integer,
+	published_by_name text
+);
+CREATE INDEX contract_models_store ON contract_models (tenant_id, store_id, order_type, status);

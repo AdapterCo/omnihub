@@ -38,6 +38,7 @@ export class AdapterSignError extends Error {
 }
 
 export type ContractSigner = { role: string; name: string; email: string; externalId?: string; cpf?: string; phone?: string };
+export type SignTemplate = { id: string; key: string; name: string; description: string; roles: { key: string; label: string; signingGroup: number; isCompany: boolean }[] };
 export type SentEnvelope = {
  id: string; status: string; externalRef: string; validationCode: string | null; replayed: boolean;
  documents: { id: string; filename: string; originalSha256: string }[];
@@ -83,12 +84,28 @@ export class AdapterSignClient {
   throw new AdapterSignError(res.status, err.code ?? `HTTP_${res.status}`, err.message ?? `Adapter Sign respondeu HTTP ${res.status}.`, err.request_id ?? '', err.details ?? null);
  }
 
+ /**
+  * Modelos de assinatura da organização (GET /templates — permissão template:read, que toda API
+  * key tem). Cada modelo traz os papéis: key, label, signingGroup e isCompany.
+  */
+ async listTemplates(): Promise<SignTemplate[]> {
+  const list = await this.json<unknown>(await this.call('GET', '/templates'));
+  if (!Array.isArray(list)) throw new AdapterSignError(0, 'INVALID_RESPONSE', 'Resposta inesperada do Adapter Sign ao listar os modelos.');
+  return list
+   .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object' && typeof (t as { key?: unknown }).key === 'string')
+   .map((t) => ({
+    id: String(t.id ?? ''), key: String(t.key), name: String(t.name ?? t.key), description: String(t.description ?? ''),
+    roles: (Array.isArray(t.roles) ? t.roles : []).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object' && typeof (r as { key?: unknown }).key === 'string')
+     .map((r) => ({ key: String(r.key), label: String(r.label ?? r.key), signingGroup: Number(r.signingGroup ?? 1), isCompany: r.isCompany === true })),
+   }));
+ }
+
  async sendFromTemplate(pdf: Uint8Array, filename: string, data: { template: string; externalRef: string; title: string; representing?: string; signers: ContractSigner[] }): Promise<SentEnvelope> {
   const form = new FormData();
   form.append('file', new Blob([Buffer.from(pdf)], { type: 'application/pdf' }), filename);
   form.append('data', JSON.stringify(data));
   const sent = await this.json<SentEnvelope>(await this.call('POST', '/envelopes/from-template', form));
-  if (!sent.id || sent.externalRef !== data.externalRef || !Array.isArray(sent.documents) || !sent.documents[0]?.id || !Array.isArray(sent.signers) || !['loja', 'cliente'].every(role => sent.signers.some(s => s.role === role && s.id))) {
+  if (!sent.id || sent.externalRef !== data.externalRef || !Array.isArray(sent.documents) || !sent.documents[0]?.id || !Array.isArray(sent.signers) || !data.signers.every(signer => sent.signers.some(s => s.role === signer.role && s.id))) {
    throw new AdapterSignError(0, 'INVALID_RESPONSE', 'Resposta de envio incompleta ou referente a outro contrato. A referência original será preservada para reconciliação.');
   }
   return sent;

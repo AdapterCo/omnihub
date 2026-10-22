@@ -1,11 +1,12 @@
 import { RuleError } from '../errors.ts';
 import { requirePermission, requireStoreAccess } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
-import { dayKey } from '../time.ts';
+import { dayKey, localParts } from '../time.ts';
 import type { ObjectStorage } from '../storage/index.ts';
 import { storeDocument } from '../documents/service.ts';
 import { currentTemplateFor, placeholdersOf, type ContractTemplate } from './templates.ts';
 import { renderContractPdf } from './pdf.ts';
+import { publishedTemplateFor } from './models.ts';
 
 // Motor de contratos (instrucao-sistema-vendas.md §5–§8, §24, §33): dados do pedido →
 // validação → snapshot → modelo versionado → PDF → hash → documento "Contrato gerado
@@ -36,7 +37,7 @@ function addDays(iso: string, days: number): string {
 
 export type ContractSource = {
  order: { id: string; number: number; type: 'VENDA' | 'LOCACAO'; status: string; storeId: string; customerId: string; total: number; purchaseDate: string; downPayment: number; downPaymentMethod: string; installments: number; firstDueDate: string; adhesionAmount: number; monthlyAmount: number; dueDay: number };
- store: { id: string; name: string; cnpj: string };
+ store: { id: string; name: string; cnpj: string; legalName?: string };
  customer: { name: string; document: string; docType: string; email: string; phone: string; zip: string; address: string; number: string; complement: string; district: string; city: string; state: string };
  unit: { serial: string; color: string; memory: string; condition: string; productName: string };
 };
@@ -47,7 +48,7 @@ async function loadSource(db: D1Database, tenantId: string, orderId: string): Pr
   .bind(orderId, tenantId)
   .first<ContractSource['order'] & { unitId: string }>();
  if (!o) throw new RuleError('Pedido não encontrado.', 404);
- const store = await db.prepare('SELECT id, name, cnpj FROM stores WHERE id = ? AND tenant_id = ?').bind(o.storeId, tenantId).first<ContractSource['store']>();
+ const store = await db.prepare('SELECT id, name, cnpj, legal_name AS legalName FROM stores WHERE id = ? AND tenant_id = ?').bind(o.storeId, tenantId).first<ContractSource['store']>();
  const customer = await db.prepare('SELECT name, document, doc_type AS docType, email, phone, zip, address, number, complement, district, city, state FROM customers WHERE id = ? AND tenant_id = ?').bind(o.customerId, tenantId).first<ContractSource['customer']>();
  const unit = await db.prepare('SELECT u.serial AS serial, u.color AS color, u.memory AS memory, u.condition AS condition, p.name AS productName FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.id = ? AND u.tenant_id = ?').bind(o.unitId, tenantId).first<ContractSource['unit']>();
  if (!store || !customer || !unit) throw new RuleError('Dados do pedido incompletos (loja, cliente ou unidade não encontrados).', 404);
@@ -97,15 +98,31 @@ export function buildContractValues(template: ContractTemplate, src: ContractSou
   'pedido.data_contrato': brDate(contractDate),
   'pedido.data_contrato_extenso': longDate(contractDate),
  };
+ const t = localParts(now);
+ const pad = (n: number) => String(n).padStart(2, '0');
+ values['cliente.telefone'] = phone;
+ values['pedido.numero'] = o.number > 0 ? String(o.number) : '';
+ values['pedido.data_hora_geracao'] = `${pad(t.day)}/${pad(t.month)}/${t.year} ${pad(t.hour)}:${pad(t.minute)}`;
+ values['loja.razao_social'] = String(src.store.legalName || src.store.name || '').trim();
+ values['loja.cnpj'] = formatCnpj(src.store.cnpj);
+ // Garantia: modelos da loja definem o prazo em "Condições"; os modelos do código têm o prazo fixo da versão.
+ const warrantyDays = template.conditions?.warrantyDays ?? template.warrantyDays ?? null;
+ const pct = (bp: number | null | undefined) => (bp == null ? '' : `${(bp / 100).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`);
+ values['contrato.garantia_dias'] = warrantyDays ? String(warrantyDays) : '';
+ values['contrato.multa'] = pct(template.conditions?.fineBp);
+ values['contrato.juros'] = pct(template.conditions?.interestBp);
+ values['contrato.residual'] = template.conditions?.residualCents != null ? formatMoney(template.conditions.residualCents) : '';
  if (template.orderType === 'VENDA') {
   values['pedido.data_compra'] = brDate(o.purchaseDate);
   values['pedido.valor'] = o.total > 0 ? formatMoney(o.total) : '';
   values['pedido.forma_pagamento'] = paymentDescription(o);
-  values['pedido.garantia_ate'] = template.warrantyDays && o.purchaseDate ? brDate(addDays(o.purchaseDate, template.warrantyDays)) : '';
+  values['pedido.garantia_ate'] = warrantyDays && o.purchaseDate ? brDate(addDays(o.purchaseDate, warrantyDays)) : '';
  } else {
   values['pedido.valor_adesao'] = o.adhesionAmount > 0 ? formatMoney(o.adhesionAmount) : '';
   values['pedido.valor_mensalidade'] = o.monthlyAmount > 0 ? formatMoney(o.monthlyAmount) : '';
   values['pedido.dia_vencimento'] = o.dueDay >= 1 && o.dueDay <= 31 ? String(o.dueDay) : '';
+  // Locação: a garantia conta da data do contrato (entrega do aparelho).
+  values['pedido.garantia_ate'] = warrantyDays ? brDate(addDays(contractDate, warrantyDays)) : '';
  }
  return values;
 }
@@ -122,10 +139,12 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  const src = await loadSource(db, tenantId, orderId);
  requireStoreAccess(actor, src.order.storeId);
  if (src.order.status === 'CANCELLED') throw new RuleError('Pedido cancelado não gera contrato.', 409);
- const template = currentTemplateFor(src.order.type);
+ // Modelo publicado pela própria loja (Minhas lojas > Modelos de contrato) tem prioridade; sem ele,
+ // vale o modelo escrito no código, que só serve à empresa dona do texto.
+ const template = (await publishedTemplateFor(db, storage, tenantId, src.store.id, src.order.type)) ?? currentTemplateFor(src.order.type);
  // O texto do modelo cita a empresa: gerar para outra loja produziria um contrato com a parte errada.
- if (digits(src.store.cnpj) !== template.ownerCnpj) {
-  throw new RuleError(`O modelo "${template.title}" (v${template.version}) é da empresa ${template.ownerName}, CNPJ ${formatCnpj(template.ownerCnpj)}. A loja ${src.store.name} está com CNPJ ${formatCnpj(src.store.cnpj) || 'não informado'}. Cadastre o CNPJ correto da loja ou peça um modelo de contrato para esta empresa.`, 409);
+ if (template.ownerCnpj && digits(src.store.cnpj) !== template.ownerCnpj) {
+  throw new RuleError(`O modelo "${template.title}" (v${template.version}) é da empresa ${template.ownerName}, CNPJ ${formatCnpj(template.ownerCnpj)}. A loja ${src.store.name} está com CNPJ ${formatCnpj(src.store.cnpj) || 'não informado'}. Cadastre o modelo de contrato desta loja em Minhas lojas > Modelos de contrato (a partir do PDF que a loja já usa), ou corrija o CNPJ da loja.`, 409);
  }
  const locked = await db.prepare(`SELECT id FROM contracts WHERE tenant_id = ? AND order_id = ? AND internal_status IN (${CONTRACT_LOCKING_STATUSES.map(() => '?').join(',')})`).bind(tenantId, orderId, ...CONTRACT_LOCKING_STATUSES).first<{ id: string }>();
  if (locked) throw new RuleError('Este pedido já tem contrato enviado para assinatura. Cancele o envio antes de gerar outro.', 409);
@@ -138,7 +157,8 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  const externalRef = `pedido-${src.order.number}-${template.key}-v${template.version}-r${revision}`;
  const title = `${template.orderType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${src.order.number} - ${values['cliente.nome']}`;
  const rendering=await db.prepare('SELECT moto_initials AS moto,locacao_initials AS locacao FROM signature_configs WHERE tenant_id=? AND store_id=?').bind(tenantId,src.store.id).first<{moto:number;locacao:number}>();
- const clientInitials=!!(template.orderType==='VENDA'?rendering?.moto:rendering?.locacao);
+ // Modelo da loja traz a própria opção de rubrica; o do código usa a da configuração de assinatura.
+ const clientInitials=template.modelId?!!template.clientInitials:!!(template.orderType==='VENDA'?rendering?.moto:rendering?.locacao);
  const pdf = await renderContractPdf(template, values, { title, now, clientInitials });
  const contractId = crypto.randomUUID();
  const doc = await storeDocument(db, storage, tenantId, {
@@ -147,7 +167,12 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
   originalFilename: `${externalRef}.pdf`, bytes: pdf, source: 'system',
  }, actor, now);
  // Snapshot obrigatório (§8): o contrato não muda se o cadastro mudar depois.
- const snapshot = JSON.stringify({ template: { key: template.key, version: template.version }, rendering:{clientInitials}, order: { id: orderId, number: src.order.number, type: src.order.type }, storeId: src.store.id, values, generatedAt: now });
+ // Modelo da loja: o snapshot guarda também o modelo de assinatura, os papéis e as condições usados
+ // (envio e boletos leem daqui — editar o modelo depois não muda este contrato).
+ const snapshot = JSON.stringify({
+  template: { key: template.key, version: template.version, modelId: template.modelId ?? null, title: template.title, signTemplateKey: template.signTemplateKey ?? null, signatureRoles: template.signatureRoles ?? null, conditions: template.conditions ?? null },
+  rendering:{clientInitials}, order: { id: orderId, number: src.order.number, type: src.order.type }, storeId: src.store.id, values, generatedAt: now,
+ });
  await db.batch([
   db.prepare("UPDATE contracts SET internal_status = 'SUPERSEDED', updated_at = ? WHERE tenant_id = ? AND order_id = ? AND internal_status = 'GENERATED'").bind(now, tenantId, orderId),
   db.prepare(

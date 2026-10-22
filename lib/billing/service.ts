@@ -65,6 +65,28 @@ export function monthlyDates(first: string,count: number): string[] {
  return Array.from({length:count},(_,i)=> {const last=new Date(Date.UTC(y,m+i,0)).getUTCDate();return new Date(Date.UTC(y,m-1+i,Math.min(d,last))).toISOString().slice(0,10);});
 }
 export type ScheduleInput = {firstDueDate?: string; adhesionDueDate?: string; fineBp?: number; interestBp?: number};
+
+/**
+ * Condições da locação (multa, juros, residual) do contrato do pedido. Contrato gerado por modelo
+ * da loja traz as condições no snapshot; o modelo de locação v1 do código tem as das cláusulas 2.3
+ * e 4.2 (multa 2%, juros 1% a.m., residual R$ 19,90). Loja com modelo próprio e pedido sem
+ * contrato: bloqueia (os valores vêm do contrato, nunca presumidos).
+ */
+export async function rentalConditions(db: D1Database, tenant: string, orderId: string, storeId: string, statuses: string[] | null = null): Promise<{ fineBp: number; interestBp: number; residualCents: number } | null> {
+ const where = statuses ? `internal_status IN (${statuses.map(() => '?').join(',')})` : "internal_status NOT IN ('SUPERSEDED','CANCELLED')";
+ const row = await db.prepare(`SELECT template_key AS templateKey, template_version AS version, payload_snapshot AS snapshot FROM contracts WHERE order_id = ? AND tenant_id = ? AND ${where} ORDER BY revision DESC LIMIT 1`).bind(orderId, tenant, ...(statuses ?? [])).first<{ templateKey: string; version: number; snapshot: string }>();
+ if (row) {
+  type Conditions = { fineBp?: number | null; interestBp?: number | null; residualCents?: number | null };
+  let c: Conditions | null = null;
+  try { c = (JSON.parse(row.snapshot) as { template?: { conditions?: Conditions | null } }).template?.conditions ?? null; } catch { c = null; }
+  if (c && c.fineBp != null && c.interestBp != null && c.residualCents != null) return { fineBp: Number(c.fineBp), interestBp: Number(c.interestBp), residualCents: Number(c.residualCents) };
+  if (row.templateKey === 'contrato-locacao' && Number(row.version) === 1) return { fineBp: 200, interestBp: 100, residualCents: 1990 };
+  return null;
+ }
+ if (statuses) return null;
+ const model = await db.prepare("SELECT id FROM contract_models WHERE tenant_id = ? AND store_id = ? AND order_type = 'LOCACAO' AND status = 'PUBLISHED' LIMIT 1").bind(tenant, storeId).first<{ id: string }>();
+ return model ? null : { fineBp: 200, interestBp: 100, residualCents: 1990 };
+}
 export async function prepareSchedule(db: D1Database, tenant: string, id: string, input: ScheduleInput, actor: Actor, now=Date.now()) {
  const o=await orderScope(db,tenant,id,actor,'ORDER_CREATE');
  // Só cobrar condições já finalizadas: evita edição/cancelamento concorrente do pedido aberto.
@@ -78,7 +100,10 @@ export async function prepareSchedule(db: D1Database, tenant: string, id: string
  const first=o.first_due_date||(o.type==='LOCACAO'?String(input.firstDueDate??''):'');
  if (!validBillingDate(first) || first<dayKey(now)) throw new RuleError('Informe o primeiro vencimento, sem data passada.',400);
  if (o.type==='LOCACAO' && Number(first.slice(-2))!==Number(o.due_day)) throw new RuleError('O primeiro vencimento deve respeitar o dia do contrato.',400);
- const fine=o.type==='LOCACAO'?200:input.fineBp, interest=o.type==='LOCACAO'?100:input.interestBp;
+ // Locação: multa e juros vêm do contrato do pedido (modelo da loja ou contrato v1); venda: o vendedor informa.
+ const rental=o.type==='LOCACAO'?await rentalConditions(db,tenant,id,o.store_id):null;
+ if (o.type==='LOCACAO' && !rental) throw new RuleError('Gere o contrato de locação deste pedido antes de preparar os boletos: multa e juros vêm do contrato.',409);
+ const fine=o.type==='LOCACAO'?rental!.fineBp:input.fineBp, interest=o.type==='LOCACAO'?rental!.interestBp:input.interestBp;
  if (![fine,interest].every(v=>Number.isInteger(v)&&v!>=0&&v!<=10000)) throw new RuleError('Informe multa e juros da venda, inclusive zero se não houver.',400);
  const total=o.type==='LOCACAO'?Number(o.monthly_amount)*12:Number(o.total)-Number(o.down_payment);
  const unit=Math.floor(total/count);
@@ -186,16 +211,18 @@ export async function closeRental(db:D1Database,tenant:string,id:string,input:{t
  if(assessment.length<5||assessment.length>2000||!Number.isSafeInteger(damage)||damage<0||damage>100000000)throw new RuleError('Informe a avaliação presencial e o valor exato das avarias (zero se não houver).',400);
  if(input.type==='PURCHASE' && damage!==0)throw new RuleError('Cobrança de avarias pertence à devolução.',400);
  const c=await config(db,tenant,o.store_id),api=client(c,fetcher);
- const contract=await db.prepare("SELECT template_key AS templateKey,template_version AS version FROM contracts WHERE order_id=? AND tenant_id=? AND internal_status='COMPLETED' ORDER BY revision DESC LIMIT 1").bind(id,tenant).first<{templateKey:string;version:number}>();
- if(!contract||contract.templateKey!=='contrato-locacao'||Number(contract.version)!==1)throw new RuleError('É necessário contrato de locação v1 assinado para aplicar estas regras.',409);
+ // Regras de encerramento (devolução/compra) vêm do contrato ASSINADO: modelo da loja (condições no
+ // snapshot) ou contrato de locação v1 do código (cláusulas 4, 7 e 9).
+ const terms=await rentalConditions(db,tenant,id,o.store_id,['COMPLETED']);
+ if(!terms)throw new RuleError('É necessário o contrato de locação assinado (com multa, juros e valor residual definidos) para aplicar estas regras.',409);
  const all=await db.prepare('SELECT * FROM order_receivables WHERE order_id=? AND tenant_id=?').bind(id,tenant).all<Receivable>();
  if((all.results??[]).filter(r=>r.kind==='RENT').length!==12)throw new RuleError('Prepare as 12 mensalidades antes de encerrar a locação.',409);
  const effective=old?.effective_date??dayKey(now);
  const extraKind=input.type==='RETURN'?'DAMAGE':'RESIDUAL';
- const extraAmount=input.type==='RETURN'?damage:1990; // contrato v1 cláusula 4.2
+ const extraAmount=input.type==='RETURN'?damage:terms.residualCents; // valor residual do contrato (v1: cláusula 4.2, R$ 19,90)
  if(extraAmount && !(all.results??[]).some(r=>r.kind===extraKind)) {
   const due=String(input.type==='RETURN'?input.damageDueDate??'':input.residualDueDate??'');
-  if(!validBillingDate(due)||due<dayKey(now))throw new RuleError('Informe o vencimento da cobrança de '+(input.type==='RETURN'?'avarias.':'compra (R$ 19,90).'),400);
+  if(!validBillingDate(due)||due<dayKey(now))throw new RuleError('Informe o vencimento da cobrança de '+(input.type==='RETURN'?'avarias.':'compra ('+new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(terms.residualCents/100)+').'),400);
   if(input.type==='PURCHASE') {
    for(const r of all.results??[]) {if(r.provider_id)await syncReceivable(db,tenant,r.id,fetcher,now);}
    const unpaid=await db.prepare("SELECT id FROM order_receivables WHERE order_id=? AND kind IN ('RENT','ADHESION') AND (status<>'PAID' OR environment<>'PRODUCTION') LIMIT 1").bind(id).first();

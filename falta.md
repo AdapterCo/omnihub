@@ -348,6 +348,7 @@ Decisões do usuário: e-mail+senha, PostgreSQL, Next.js padrão em Node. Detalh
 | **Nota fiscal e cupom fiscal ocultos na tela (2026-10-10)** | **Concluído** | Tudo de NF-e/NFC-e escondido na interface por `SHOW_FISCAL=false` (`app/workspace.tsx`); comprovante não fiscal mantido; backend fiscal intacto e reativável. |
 | **Nova identidade visual (2026-10-10)** | **Concluído** | Tema "balcão de loja" (verde-balcão, amarelo-etiqueta, Bricolage Grotesque + Public Sans), visor de caixa e etiquetas de preço no PDV, indicadores em faixa única, correções de estilo em selects e no login. |
 | **Novo visual aplicado em todas as telas (2026-10-10)** | **Concluído** | Campos soltos, alinhamentos, cores antigas, botões duplicados, Limites de desconto e nomes de papel ajustados em todas as abas. Pendente à parte: validação de cliente responde 503 em vez de 400. |
+| **Modelos de contrato por loja, a partir do PDF (2026-10-21/22)** | **Concluído (falta validar com o Adapter Sign real)** | Lojista importa o PDF, marca os campos, define condições e modelo de assinatura do Adapter Sign, pré-visualiza e publica; contratos e boletos usam o modelo da loja. Pendentes: checklist de entrega, venda de celular, boleto de moto. |
 
 ---
 

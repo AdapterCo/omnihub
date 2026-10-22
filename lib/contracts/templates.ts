@@ -18,16 +18,28 @@ export type Block =
  | { kind: 'heading'; text: string }
  | { kind: 'p'; text: string }
  | { kind: 'bullet'; text: string }
+ | { kind: 'item'; text: string }
  | { kind: 'space'; size?: number }
  | { kind: 'signature'; role: 'loja' | 'cliente'; label: string };
 
 export type ContractTemplate = {
- key: 'contrato-moto' | 'contrato-locacao';
+ key: string;
  version: number;
  orderType: 'VENDA' | 'LOCACAO';
- // O texto cita a empresa pelo nome: o modelo só pode ser gerado pela loja com este CNPJ.
- ownerCnpj: string;
- ownerName: string;
+ // Modelos escritos no código citam a empresa pelo nome: só podem ser gerados pela loja com este
+ // CNPJ. Modelos da própria loja (contract_models) não têm essa trava — o texto é da loja.
+ ownerCnpj?: string;
+ ownerName?: string;
+ // Papéis do modelo de assinatura no Adapter Sign (marcas [[AS:assinatura:<papel>]] no PDF).
+ signatureRoles?: { company: string; client: string };
+ // Identificador do modelo de assinatura no Adapter Sign escolhido no modelo da loja (vazio = o da configuração de assinatura).
+ signTemplateKey?: string;
+ clientInitials?: boolean;
+ // Visual da loja: logo e cabeçalho (1ª página), rodapé com numeração em todas as páginas.
+ page?: { headerText: string; footerText: string; logo: { bytes: Uint8Array; mime: string } | null };
+ // Condições do contrato usadas também pelos boletos (modelos da loja).
+ conditions?: { warrantyDays: number | null; fineBp: number | null; interestBp: number | null; residualCents: number | null };
+ modelId?: string;
  title: string;
  style: { titleSize: number; titleAlign: 'center' | 'left'; titleBold: boolean; headingSize: number; headingBold: boolean; bodySize: number; justify: boolean; pageNumbers: boolean };
  // Regra de garantia centralizada por versão (moto: 90 dias corridos a partir da compra, cláusula 4.1).
