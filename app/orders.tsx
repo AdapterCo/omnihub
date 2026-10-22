@@ -251,7 +251,7 @@ function ContractSection({ order, contracts, act, refresh, perms, busy, active, 
     <div><span className={'badge ' + (CONTRACT_STATUS[current.status]?.tone ?? 'neutral')}>{statusLabel(current.status)}</span></div>
     <div className="muted">Gerado por {current.generatedByName} em {date(current.generatedAt)} · referência {current.externalRef}{current.validationCode ? ` · código de validação ${current.validationCode}` : ''}</div>
     <div className="muted" style={{ wordBreak: 'break-all' }}>SHA-256 do PDF original: {current.originalSha256}</div>
-    {current.sentAt && <div className="muted">Enviado por {current.sentByName} em {date(current.sentAt)} (a loja assina no envio, em nome de quem enviou)</div>}
+    {current.sentAt && <div className="muted">Enviado por {current.sentByName} em {date(current.sentAt)} (a empresa assina no envio, com a razão social da loja)</div>}
     {current.completedAt && <div className="muted">Assinado em {date(current.completedAt)}. Conferência pública: sign.adapterco.com.br/verify{current.validationCode ? ` (código ${current.validationCode})` : ''}</div>}
     {current.lastError && current.status !== 'COMPLETED' && <div className="notice error" style={{ margin: 0 }}>{current.lastError}</div>}
    </div> : <p className="muted" style={{ marginTop: 6 }}>{checklist ? 'Nenhum checklist gerado. Na entrega, marque os itens conferidos e gere o PDF para o cliente assinar.' : 'Nenhum contrato gerado. Confira os dados do pedido e do cliente e gere o PDF para revisar antes do envio.'}</p>}
@@ -376,7 +376,7 @@ export function SignatureConfigDialog({ data, store, act, busy, onClose }: { dat
  const summary = data.state.signatureConfigs?.[store.id];
  const [motoInitials,setMotoInitials]=useState(summary?.motoInitials??false);
  const [locacaoInitials,setLocacaoInitials]=useState(summary?.locacaoInitials??false);
- const [v, setV] = useState<Values>({ apiKey: '', webhookSecret: '', motoTemplate: summary?.motoTemplate ?? '', locacaoTemplate: summary?.locacaoTemplate ?? '' });
+ const [v, setV] = useState<Values>({ apiKey: '', webhookSecret: '', motoTemplate: summary?.motoTemplate ?? '', locacaoTemplate: summary?.locacaoTemplate ?? '', companyEmail: summary?.companyEmail ?? '' });
  const [copied, setCopied] = useState(false);
  const set = (k: string, value: string) => setV((p) => ({ ...p, [k]: value }));
  const webhookUrl = summary?.webhookPath ? `${typeof window === 'undefined' ? '' : window.location.origin}${summary.webhookPath}` : '';
@@ -384,7 +384,7 @@ export function SignatureConfigDialog({ data, store, act, busy, onClose }: { dat
  const usesRent = store.modalities?.includes('LOCACAO');
  const submit = async (e: FormEvent) => {
   e.preventDefault();
-  const ok = await act({ type: 'signature.config.save', storeId: store.id, apiKey: v.apiKey.trim() || undefined, webhookSecret: v.webhookSecret.trim() || undefined, motoTemplate: v.motoTemplate.trim(), locacaoTemplate: v.locacaoTemplate.trim(),motoInitials,locacaoInitials });
+  const ok = await act({ type: 'signature.config.save', storeId: store.id, apiKey: v.apiKey.trim() || undefined, webhookSecret: v.webhookSecret.trim() || undefined, motoTemplate: v.motoTemplate.trim(), locacaoTemplate: v.locacaoTemplate.trim(), companyEmail: v.companyEmail.trim(), motoInitials,locacaoInitials });
   if (ok) set('apiKey', ''), set('webhookSecret', '');
  };
  return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Assinatura eletrônica · {store.name}</DialogTitle><DialogDescription>Integração com o Adapter Sign. Cada loja usa a organização dela no Adapter Sign (plano, modelos, API key e webhook próprios).</DialogDescription></DialogHeader>
@@ -395,6 +395,7 @@ export function SignatureConfigDialog({ data, store, act, busy, onClose }: { dat
    </div>
    <Field label={summary?.configured ? 'API key (deixe em branco para manter a salva)' : 'API key do Adapter Sign'} full hint="Adapter Sign → Configurações → API keys. Ela aparece uma única vez lá."><input type="password" autoComplete="off" value={v.apiKey} onChange={(e) => set('apiKey', e.target.value)} /></Field>
    <Field label={summary?.hasWebhookSecret ? 'Segredo do webhook (em branco mantém o salvo)' : 'Segredo do webhook (whsec_...)'} full hint="Adapter Sign → Configurações → Webhooks, ao cadastrar a URL abaixo."><input type="password" autoComplete="off" value={v.webhookSecret} onChange={(e) => set('webhookSecret', e.target.value)} /></Field>
+   <Field label="E-mail da empresa para assinatura" full hint={`A empresa assina os contratos com a razão social da loja${store.legalName ? ` (${store.legalName})` : ' (preencha em Editar loja)'} e este e-mail. Quem enviou continua registrado no histórico.`}><input type="email" autoComplete="off" value={v.companyEmail} maxLength={254} onChange={(e) => set('companyEmail', e.target.value)} /></Field>
    {usesSale && <Field label="Identificador do modelo de venda (moto) no Adapter Sign" hint="Ex.: o identificador que você criou em Modelos (papéis loja e cliente)."><input value={v.motoTemplate} maxLength={60} onChange={(e) => set('motoTemplate', e.target.value)} /></Field>}
    {usesRent && <Field label="Identificador do modelo de locação no Adapter Sign"><input value={v.locacaoTemplate} maxLength={60} onChange={(e) => set('locacaoTemplate', e.target.value)} /></Field>}
    {usesSale&&<label><input type="checkbox" checked={motoInitials} onChange={e=>setMotoInitials(e.target.checked)}/> Rubrica do cliente em cada página — moto</label>}

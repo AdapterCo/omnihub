@@ -9,7 +9,8 @@ import { AdapterSignClient, AdapterSignError, verifyAdapterSignWebhook, ADAPTER_
 
 // Assinatura eletrônica dos contratos pelo Adapter Sign (instrucao-sistema-vendas.md §10–§15;
 // integracao-sistema-vendas.md do Adapter Sign). Regras:
-// - a loja assina no envio, em nome do VENDEDOR LOGADO (papel "loja", externalId = id interno);
+// - a empresa assina no envio com a razão social da loja e o e-mail da empresa da configuração (papel "loja");
+//   quem enviou vai como externalId (id interno) e fica em sent_by;
 // - externalRef do contrato é a chave de idempotência: retentativa nunca duplica envelope;
 // - o signingUrl do cliente é credencial temporária: devolvido à tela, NUNCA gravado;
 // - status só muda a partir do próprio Adapter Sign (GET /envelopes/{id}); o webhook só avisa;
@@ -18,6 +19,7 @@ import { AdapterSignClient, AdapterSignError, verifyAdapterSignWebhook, ADAPTER_
 export type SignatureDeps = { fetch: SignFetch; storage: ObjectStorage; baseUrl?: string };
 
 const TEMPLATE_KEY = /^[a-z0-9][a-z0-9_-]{0,59}$/;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const encryptSecret = (value: string) => JSON.stringify(encryptPayload(value));
 const decryptSecret = (value: string) => {
@@ -28,14 +30,14 @@ const decryptSecret = (value: string) => {
  }
 };
 
-type ConfigRow = { id: string; tenantId: string; storeId: string; apiKeyEnc: string; webhookSecretEnc: string | null; webhookKey: string; motoTemplate: string; locacaoTemplate: string; updatedAt: number };
-const CONFIG_SELECT = 'SELECT id, tenant_id AS tenantId, store_id AS storeId, api_key_enc AS apiKeyEnc, webhook_secret_enc AS webhookSecretEnc, webhook_key AS webhookKey, moto_template AS motoTemplate, locacao_template AS locacaoTemplate, updated_at AS updatedAt FROM signature_configs';
+type ConfigRow = { id: string; tenantId: string; storeId: string; apiKeyEnc: string; webhookSecretEnc: string | null; webhookKey: string; motoTemplate: string; locacaoTemplate: string; companyEmail: string; updatedAt: number };
+const CONFIG_SELECT = 'SELECT id, tenant_id AS tenantId, store_id AS storeId, api_key_enc AS apiKeyEnc, webhook_secret_enc AS webhookSecretEnc, webhook_key AS webhookKey, moto_template AS motoTemplate, locacao_template AS locacaoTemplate, company_email AS companyEmail, updated_at AS updatedAt FROM signature_configs';
 
 async function loadConfig(db: D1Database, tenantId: string, storeId: string): Promise<ConfigRow | null> {
  return db.prepare(`${CONFIG_SELECT} WHERE tenant_id = ? AND store_id = ?`).bind(tenantId, storeId).first<ConfigRow>();
 }
 
-export async function saveSignatureConfig(db: D1Database, tenantId: string, storeId: string, input: { apiKey?: string; webhookSecret?: string; motoTemplate?: string; locacaoTemplate?: string; motoInitials?: boolean; locacaoInitials?: boolean }, actor: Actor, now = Date.now()): Promise<void> {
+export async function saveSignatureConfig(db: D1Database, tenantId: string, storeId: string, input: { apiKey?: string; webhookSecret?: string; motoTemplate?: string; locacaoTemplate?: string; motoInitials?: boolean; locacaoInitials?: boolean; companyEmail?: string }, actor: Actor, now = Date.now()): Promise<void> {
  requirePermission(actor.permissions, 'SIGNATURE_CONFIG');
  const store = await db.prepare('SELECT id FROM stores WHERE id = ? AND tenant_id = ?').bind(storeId, tenantId).first<{ id: string }>();
  if (!store) throw new RuleError('Loja não encontrada.', 404);
@@ -47,6 +49,9 @@ export async function saveSignatureConfig(db: D1Database, tenantId: string, stor
  for (const [label, key] of [['moto', moto], ['locação', locacao]] as const) {
   if (key && !TEMPLATE_KEY.test(key)) throw new RuleError(`Identificador do modelo de ${label} inválido (letras minúsculas, números, "-" e "_", até 60 caracteres), como aparece no Adapter Sign.`, 400);
  }
+ // E-mail da empresa no papel da empresa do Adapter Sign (em branco mantém o salvo só quando omitido).
+ const companyEmail = input.companyEmail === undefined ? undefined : String(input.companyEmail).trim().toLowerCase();
+ if (companyEmail && (companyEmail.length > 254 || !EMAIL.test(companyEmail))) throw new RuleError('E-mail da empresa para assinatura inválido.', 400);
  if (apiKey && (apiKey.length < 10 || apiKey.length > 500 || /\s/.test(apiKey))) throw new RuleError('API key do Adapter Sign inválida.', 400);
  if (secret && (secret.length < 10 || secret.length > 500 || /\s/.test(secret))) throw new RuleError('Segredo do webhook inválido.', 400);
  const existing = await loadConfig(db, tenantId, storeId);
@@ -57,6 +62,7 @@ export async function saveSignatureConfig(db: D1Database, tenantId: string, stor
    .bind(crypto.randomUUID(), tenantId, storeId, encryptSecret(apiKey), secret ? encryptSecret(secret) : null, randomBytes(24).toString('hex'), moto, locacao, actor.userId, now, now)
    .run();
   await db.prepare('UPDATE signature_configs SET moto_initials=?,locacao_initials=? WHERE store_id=? AND tenant_id=?').bind(input.motoInitials?1:0,input.locacaoInitials?1:0,storeId,tenantId).run();
+  if (companyEmail !== undefined) await db.prepare('UPDATE signature_configs SET company_email = ? WHERE store_id = ? AND tenant_id = ?').bind(companyEmail, storeId, tenantId).run();
   return;
  }
  // Campo de segredo em branco mantém o valor já salvo (nunca é exibido de volta).
@@ -66,9 +72,10 @@ export async function saveSignatureConfig(db: D1Database, tenantId: string, stor
   .run();
  if(input.motoInitials!==undefined)await db.prepare('UPDATE signature_configs SET moto_initials=? WHERE store_id=? AND tenant_id=?').bind(input.motoInitials?1:0,storeId,tenantId).run();
  if(input.locacaoInitials!==undefined)await db.prepare('UPDATE signature_configs SET locacao_initials=? WHERE store_id=? AND tenant_id=?').bind(input.locacaoInitials?1:0,storeId,tenantId).run();
+ if (companyEmail !== undefined) await db.prepare('UPDATE signature_configs SET company_email = ? WHERE store_id = ? AND tenant_id = ?').bind(companyEmail, storeId, tenantId).run();
 }
 
-export type SignatureConfigSummary = { storeId: string; configured: boolean; hasWebhookSecret: boolean; motoTemplate: string; locacaoTemplate: string; motoInitials: boolean; locacaoInitials: boolean; webhookPath: string | null; updatedAt: number | null };
+export type SignatureConfigSummary = { storeId: string; configured: boolean; hasWebhookSecret: boolean; motoTemplate: string; locacaoTemplate: string; motoInitials: boolean; locacaoInitials: boolean; companyEmail: string; webhookPath: string | null; updatedAt: number | null };
 
 export async function getSignatureConfigSummary(db: D1Database, tenantId: string, storeId: string): Promise<SignatureConfigSummary> {
  const c = await loadConfig(db, tenantId, storeId);
@@ -80,6 +87,7 @@ export async function getSignatureConfigSummary(db: D1Database, tenantId: string
   motoTemplate: c?.motoTemplate ?? '',
   locacaoTemplate: c?.locacaoTemplate ?? '',
   motoInitials:!!initials?.moto,locacaoInitials:!!initials?.locacao,
+  companyEmail: c?.companyEmail ?? '',
   webhookPath: c ? `/api/signature/adapter-sign/webhook/${c.webhookKey}` : null,
   updatedAt: c ? Number(c.updatedAt) : null,
  };
@@ -193,15 +201,24 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
  const templateKey = snapshotTemplate.signTemplateKey || (contract.contractType === 'VENDA' ? config.motoTemplate : config.locacaoTemplate);
  if (!templateKey) throw new RuleError(`Escolha o modelo de assinatura do Adapter Sign no modelo de contrato da loja (Minhas lojas > Modelos de contrato) ou informe o de ${contract.contractType === 'VENDA' ? 'moto' : 'locação'} em Minhas lojas > Assinatura eletrônica.`, 409);
 
- // Representante da loja: quem envia pela primeira vez (retentativas mantêm o mesmo).
- let seller = contract.sentBy ? { id: contract.sentBy, name: contract.sentByName ?? '', email: contract.sentByEmail ?? '' } : null;
- // Modelo sem papel da empresa (ex.: checklist assinado só pelo cliente): ninguém assina pela loja.
- if (!seller && !roles.company && actor) seller = { id: actor.userId, name: actor.displayName, email: '' };
+ // Quem envia pela primeira vez (retentativas mantêm o mesmo): fica em sent_by e vai como externalId.
+ let seller = contract.sentBy ? { id: contract.sentBy, name: contract.sentByName ?? '' } : null;
  if (!seller) {
   if (!actor) throw new RuleError('Envio sem vendedor identificado.', 409);
-  const user = await db.prepare('SELECT display_name AS name, email FROM users WHERE id = ?').bind(actor.userId).first<{ name: string; email: string | null }>();
-  if (!user?.email) throw new RuleError('Seu usuário não tem e-mail cadastrado: o Adapter Sign exige o e-mail de quem assina pela loja.', 409);
-  seller = { id: actor.userId, name: (actor.displayName || user.name).trim(), email: user.email };
+  const user = await db.prepare('SELECT display_name AS name FROM users WHERE id = ?').bind(actor.userId).first<{ name: string }>();
+  seller = { id: actor.userId, name: (actor.displayName || user?.name || '').trim() };
+ }
+ // A empresa assina com a razão social da loja e o e-mail da empresa da configuração (nada presumido:
+ // faltando um dos dois, bloqueia). Retentativas reaproveitam o e-mail do primeiro envio (sent_by_email),
+ // para o Adapter Sign reconhecer o mesmo envelope.
+ let company = { name: '', email: '' };
+ if (roles.company) {
+  const store = await db.prepare('SELECT legal_name AS legalName FROM stores WHERE id = ? AND tenant_id = ?').bind(contract.storeId, tenantId).first<{ legalName: string | null }>();
+  const name = String(store?.legalName ?? '').trim();
+  const email = (contract.sentByEmail || config.companyEmail || '').trim();
+  const missing = [!name && 'a razão social da loja (Minhas lojas > Editar loja)', !email && 'o e-mail da empresa para assinatura (Minhas lojas > Assinatura eletrônica)'].filter(Boolean);
+  if (missing.length) throw new RuleError(`A empresa assina com a razão social e o e-mail da empresa. Preencha ${missing.join(' e ')}.`, 409);
+  company = { name, email };
  }
  const snapshot = JSON.parse(contract.payloadSnapshot) as { values: Record<string, string> };
  const v = snapshot.values;
@@ -214,7 +231,7 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
 
  const claimed = await db
   .prepare("UPDATE contracts SET internal_status = 'SENDING', sent_by = ?, sent_by_name = ?, sent_by_email = ?, send_attempts = send_attempts + 1, last_checked_at = ?, updated_at = ? WHERE id = ? AND internal_status IN ('GENERATED','SENDING')")
-  .bind(seller.id, seller.name, seller.email, now, now, contractId)
+  .bind(seller.id, seller.name, company.email, now, now, contractId)
   .run();
  if (claimed.meta.changes !== 1) throw new RuleError('O contrato mudou de situação. Atualize a tela.', 409);
 
@@ -227,7 +244,7 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
    template: templateKey,
    externalRef: contract.externalRef,
    title,
-   signers: roles.company ? [{ role: roles.company, name: seller.name, email: seller.email, externalId: seller.id }, clientSigner] : [clientSigner],
+   signers: roles.company ? [{ role: roles.company, name: company.name, email: company.email, externalId: seller.id }, clientSigner] : [clientSigner],
   });
   const loja = sent.signers.find((s) => s.role === roles.company);
   const cliente = sent.signers.find((s) => s.role === roles.client);

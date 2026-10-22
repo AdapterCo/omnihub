@@ -122,12 +122,12 @@ async function fixture(options: { configure?: boolean } = {}) {
     const reg = await registerAccount(db, { accountName: 'Grupo Teste', displayName: 'Dona Ana', email: 'ana@teste.com', password: PASSWORD });
     const tenantId = reg.accountId;
     const owner = await actorFor(db, tenantId, reg.userId, 'admin', 'Dona Ana');
-    const store = await createStore(db, tenantId, { name: 'D-MAX', cnpj: '65715457000128', modalities: ['VENDA_CONTRATO'] } as never, owner);
+    const store = await createStore(db, tenantId, { name: 'D-MAX', legalName: 'D-MAX Comercio de Motos LTDA', cnpj: '65715457000128', modalities: ['VENDA_CONTRATO'] } as never, owner);
     const moto = await createProduct(db, tenantId, { name: 'Scooter X1', sku: 'M1', price: 900000, cost: 1, minimum: 0, unit: 'UN', kind: 'MOTO' } as never, owner);
     const customerId = await createCustomer(db, tenantId, { name: 'Maria Cliente', document: '52998224725', docType: 'CPF', email: 'maria@exemplo.com', phone: '(24) 99999-1234', zip: '27260000', address: 'Rua A', number: '10', district: 'Centro', city: 'Volta Redonda', state: 'RJ' }, owner);
     const sellerId = await addMember(db, tenantId, { email: 'vendedor@loja.com', roleId: 'ROLE_VENDEDOR_ONLINE', name: 'Carlos Vendedor' });
     const seller = await actorFor(db, tenantId, sellerId, 'operator', 'Carlos Vendedor');
-    if (options.configure !== false) await saveSignatureConfig(db, tenantId, store, { apiKey: API_KEY, webhookSecret: WEBHOOK_SECRET, motoTemplate: 'contrato-moto', locacaoTemplate: '' }, owner, NOW);
+    if (options.configure !== false) await saveSignatureConfig(db, tenantId, store, { apiKey: API_KEY, webhookSecret: WEBHOOK_SECRET, motoTemplate: 'contrato-moto', locacaoTemplate: '', companyEmail: 'Contratos@DMax.test' }, owner, NOW);
     let serial = 0;
     const newContract = async () => {
         const unit = await registerUnit(db, tenantId, { storeId: store, productId: moto, serial: `CH-${++serial}`, color: 'Preta' }, owner, NOW);
@@ -169,7 +169,7 @@ test('configuração: API key obrigatória na criação, modelo validado, segred
     assert.equal(((await f.db.prepare('SELECT api_key_enc AS a FROM signature_configs').bind().first<{ a: string }>())!.a), row!.a, 'API key em branco mantém a salva');
 });
 
-test('envio: loja assina em nome do vendedor logado, cliente com CPF e WhatsApp, link devolvido e não gravado', async () => {
+test('envio: empresa assina com a razão social e o e-mail da configuração (vendedor como externalId), cliente com CPF e WhatsApp, link devolvido e não gravado', async () => {
     const f = await fixture();
     const c = await f.newContract();
     const sent = await sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW);
@@ -183,7 +183,7 @@ test('envio: loja assina em nome do vendedor logado, cliente com CPF e WhatsApp,
         externalRef: c.externalRef,
         title: 'Contrato de venda #1 - Maria Cliente',
         signers: [
-            { role: 'loja', name: 'Carlos Vendedor', email: 'vendedor@loja.com', externalId: f.seller.userId },
+            { role: 'loja', name: 'D-MAX Comercio de Motos LTDA', email: 'contratos@dmax.test', externalId: f.seller.userId },
             { role: 'cliente', name: 'Maria Cliente', email: 'maria@exemplo.com', cpf: '529.982.247-25', phone: '+5524999991234' },
         ],
     });
@@ -201,16 +201,20 @@ test('envio: loja assina em nome do vendedor logado, cliente com CPF e WhatsApp,
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /já foi enviado/);
 });
 
-test('envio bloqueia sem configuração, sem modelo, sem e-mail do vendedor; recusa definitiva volta para corrigir', async () => {
+test('envio bloqueia sem configuração, sem modelo, sem e-mail da empresa ou razão social; recusa definitiva volta para corrigir', async () => {
     const f = await fixture({ configure: false });
     const c = await f.newContract();
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /não configurada/);
     await saveSignatureConfig(f.db, f.tenantId, f.store, { apiKey: API_KEY, webhookSecret: WEBHOOK_SECRET, locacaoTemplate: 'contrato-locacao' }, f.owner, NOW);
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /Escolha o modelo de assinatura .* ou informe o de moto em Minhas lojas > Assinatura eletrônica/);
     await saveSignatureConfig(f.db, f.tenantId, f.store, { motoTemplate: 'contrato-moto', locacaoTemplate: '' }, f.owner, NOW);
-    const noEmailId = await addMember(f.db, f.tenantId, { email: null, roleId: 'ROLE_VENDEDOR_ONLINE', name: 'Sem Email' });
-    const noEmail = await actorFor(f.db, f.tenantId, noEmailId, 'operator', 'Sem Email');
-    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, noEmail, f.deps, NOW), /não tem e-mail/);
+    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /Preencha o e-mail da empresa para assinatura/);
+    await assert.rejects(() => saveSignatureConfig(f.db, f.tenantId, f.store, { companyEmail: 'sem-arroba' }, f.owner, NOW), /E-mail da empresa para assinatura inválido/);
+    await saveSignatureConfig(f.db, f.tenantId, f.store, { motoTemplate: 'contrato-moto', locacaoTemplate: '', companyEmail: 'contratos@dmax.test' }, f.owner, NOW);
+    assert.equal((await getSignatureConfigSummary(f.db, f.tenantId, f.store)).companyEmail, 'contratos@dmax.test');
+    await f.db.prepare("UPDATE stores SET legal_name = '' WHERE id = ?").bind(f.store).run();
+    await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /Preencha a razão social da loja/);
+    await f.db.prepare("UPDATE stores SET legal_name = 'D-MAX Comercio de Motos LTDA' WHERE id = ?").bind(f.store).run();
     f.mock.failNext({ status: 422, code: 'COMPANY_SIGNATURE_NOT_AUTHORIZED', message: 'x' });
     await assert.rejects(() => sendContractForSignature(f.db, f.tenantId, c.contractId, f.seller, f.deps, NOW), /proprietário precisa aceitar/);
     let contract = await f.contract(c.contractId);

@@ -187,7 +187,7 @@ test('assinatura: modelos do Adapter Sign listados (com motivo quando não serve
  const mock = signMock();
  const deps = { fetch: mock.fetch, storage: f.storage, baseUrl: 'https://sign.exemplo.test/api/v1' };
  await assert.rejects(() => listSignatureTemplates(f.db, f.tenantId, f.store, f.owner, deps), /Configure primeiro a assinatura eletrônica/);
- await saveSignatureConfig(f.db, f.tenantId, f.store, { apiKey: 'as_live_TESTE_MOCK_123456', webhookSecret: 'segredo-de-teste-mock-123', motoTemplate: '', locacaoTemplate: '' }, f.owner, NOW);
+ await saveSignatureConfig(f.db, f.tenantId, f.store, { apiKey: 'as_live_TESTE_MOCK_123456', webhookSecret: 'segredo-de-teste-mock-123', motoTemplate: '', locacaoTemplate: '', companyEmail: 'contratos@lojateste.test' }, f.owner, NOW);
  const options = await listSignatureTemplates(f.db, f.tenantId, f.store, f.owner, deps);
  assert.deepEqual(options.map((o) => [o.key, o.companyRole, o.clientRole, !!o.problem]), [['locacao-samuca', 'empresa', 'locatario', false], ['com-testemunha', null, null, true]]);
  const id = await f.draft({ signTemplateKey: 'locacao-samuca', signCompanyRole: 'empresa', signClientRole: 'locatario' });
@@ -198,5 +198,5 @@ test('assinatura: modelos do Adapter Sign listados (com motivo quando não serve
  const result = await sendContractForSignature(f.db, f.tenantId, contract.contractId, f.seller, deps, NOW);
  assert.equal(result.signingUrl, 'https://sign.exemplo.test/x');
  assert.equal(mock.sent[0].template, 'locacao-samuca');
- assert.deepEqual((mock.sent[0].signers as { role: string }[]).map((s) => s.role), ['empresa', 'locatario']);
+ assert.deepEqual((mock.sent[0].signers as { role: string; name: string; email: string }[]).map((s) => [s.role, s.name, s.email]), [['empresa', 'LOJA TESTE LTDA', 'contratos@lojateste.test'], ['locatario', (mock.sent[0].signers as { name: string }[])[1].name, (mock.sent[0].signers as { email: string }[])[1].email]]);
 });

@@ -200,7 +200,7 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         const { type: _t, storeId, ...input } = command;
         await saveSignatureConfig(db, tenantId, storeId, input, actor, now);
         // Nunca grava API key nem segredo na auditoria: só o que mudou de não sensível.
-        await audit({ storeId, description: 'Configuração de assinatura eletrônica (Adapter Sign) salva', entity: 'signature_config', entityId: storeId, after: { motoTemplate: input.motoTemplate ?? '', locacaoTemplate: input.locacaoTemplate ?? '', apiKeyChanged: !!input.apiKey, webhookSecretChanged: !!input.webhookSecret } });
+        await audit({ storeId, description: 'Configuração de assinatura eletrônica (Adapter Sign) salva', entity: 'signature_config', entityId: storeId, after: { motoTemplate: input.motoTemplate ?? '', locacaoTemplate: input.locacaoTemplate ?? '', companyEmail: input.companyEmail, apiKeyChanged: !!input.apiKey, webhookSecretChanged: !!input.webhookSecret } });
         return storeId;
     }
     if (command.type === 'document.delete') {
