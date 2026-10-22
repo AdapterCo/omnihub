@@ -9,7 +9,7 @@ import type { ObjectStorage } from '../storage/index.ts';
 // não pela extensão nem pelo MIME informado pelo navegador — um executável renomeado para .pdf
 // é recusado. Exclusão é sempre lógica.
 
-export const DOCUMENT_TYPES = ['ANEXO', 'CONTRATO_ORIGINAL', 'CONTRATO_ASSINADO', 'EVIDENCIA_ASSINATURA', 'BOLETOS'] as const;
+export const DOCUMENT_TYPES = ['ANEXO', 'CONTRATO_ORIGINAL', 'CONTRATO_ASSINADO', 'EVIDENCIA_ASSINATURA', 'BOLETOS', 'CHECKLIST_ENTREGA'] as const;
 export type DocumentType = typeof DOCUMENT_TYPES[number];
 export type DocumentSource = 'manual' | 'system' | 'adapter_sign';
 
@@ -106,7 +106,7 @@ export async function deleteDocument(db: D1Database, tenantId: string, id: strin
  if (!doc) throw new RuleError('Documento não encontrado.', 404);
  requireStoreAccess(actor, doc.storeId);
  // O PDF original de um contrato ainda vigente é a base do envio para assinatura: não some.
- if (doc.type === 'CONTRATO_ORIGINAL' && doc.contractId) {
+ if ((doc.type === 'CONTRATO_ORIGINAL' || doc.type === 'CHECKLIST_ENTREGA') && doc.contractId) {
   const contract = await db.prepare('SELECT internal_status AS status FROM contracts WHERE id = ?').bind(doc.contractId).first<{ status: string }>();
   if (contract && !['SUPERSEDED', 'CANCELLED'].includes(contract.status)) throw new RuleError('Este é o PDF de um contrato vigente. Gere um novo contrato (a versão atual fica substituída) em vez de excluir.', 409);
  }

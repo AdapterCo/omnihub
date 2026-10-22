@@ -74,7 +74,7 @@ export type ScheduleInput = {firstDueDate?: string; adhesionDueDate?: string; fi
  */
 export async function rentalConditions(db: D1Database, tenant: string, orderId: string, storeId: string, statuses: string[] | null = null): Promise<{ fineBp: number; interestBp: number; residualCents: number } | null> {
  const where = statuses ? `internal_status IN (${statuses.map(() => '?').join(',')})` : "internal_status NOT IN ('SUPERSEDED','CANCELLED')";
- const row = await db.prepare(`SELECT template_key AS templateKey, template_version AS version, payload_snapshot AS snapshot FROM contracts WHERE order_id = ? AND tenant_id = ? AND ${where} ORDER BY revision DESC LIMIT 1`).bind(orderId, tenant, ...(statuses ?? [])).first<{ templateKey: string; version: number; snapshot: string }>();
+ const row = await db.prepare(`SELECT template_key AS templateKey, template_version AS version, payload_snapshot AS snapshot FROM contracts WHERE order_id = ? AND tenant_id = ? AND document_kind = 'CONTRATO' AND ${where} ORDER BY revision DESC LIMIT 1`).bind(orderId, tenant, ...(statuses ?? [])).first<{ templateKey: string; version: number; snapshot: string }>();
  if (row) {
   type Conditions = { fineBp?: number | null; interestBp?: number | null; residualCents?: number | null };
   let c: Conditions | null = null;

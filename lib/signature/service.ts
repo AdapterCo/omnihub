@@ -96,7 +96,7 @@ export type SignTemplateOption = { key: string; name: string; description: strin
  * Serve o modelo com exatamente um papel da empresa e um outro papel (o cliente); os demais vêm
  * com o motivo (testemunhas e outros papéis não são preenchidos pelo OmniHub).
  */
-export async function listSignatureTemplates(db: D1Database, tenantId: string, storeId: string, actor: Actor, deps: SignatureDeps): Promise<SignTemplateOption[]> {
+export async function listSignatureTemplates(db: D1Database, tenantId: string, storeId: string, actor: Actor, deps: SignatureDeps, options: { clientOnlyAllowed?: boolean } = {}): Promise<SignTemplateOption[]> {
  requirePermission(actor.permissions, 'SIGNATURE_CONFIG');
  requireStoreAccess(actor, storeId);
  const config = await loadConfig(db, tenantId, storeId);
@@ -111,15 +111,16 @@ export async function listSignatureTemplates(db: D1Database, tenantId: string, s
  return templates.map((t) => {
   const company = t.roles.filter((r) => r.isCompany);
   const others = t.roles.filter((r) => !r.isCompany);
-  const problem = company.length !== 1 ? 'precisa ter exatamente um papel da empresa (marcado como "empresa" no Adapter Sign)'
+  // Checklist pode ser assinado só pelo cliente (sem papel da empresa); contrato exige os dois.
+  const problem = company.length > 1 || (company.length === 0 && !options.clientOnlyAllowed) ? (options.clientOnlyAllowed ? 'pode ter no máximo um papel da empresa' : 'precisa ter exatamente um papel da empresa (marcado como "empresa" no Adapter Sign)')
    : others.length !== 1 ? `precisa ter só um papel além da empresa (o do cliente); este tem ${others.length}: ${others.map((r) => r.label).join(', ') || 'nenhum'}`
    : null;
-  return { key: t.key, name: t.name, description: t.description, roles: t.roles.map((r) => ({ key: r.key, label: r.label, isCompany: r.isCompany })), companyRole: problem ? null : company[0].key, clientRole: problem ? null : others[0].key, problem };
+  return { key: t.key, name: t.name, description: t.description, roles: t.roles.map((r) => ({ key: r.key, label: r.label, isCompany: r.isCompany })), companyRole: problem ? null : (company[0]?.key ?? ''), clientRole: problem ? null : others[0].key, problem };
  });
 }
 
 type ContractRow = {
- id: string; tenantId: string; storeId: string; orderId: string; customerId: string; contractType: 'VENDA' | 'LOCACAO'; templateKey: string; revision: number;
+ id: string; tenantId: string; storeId: string; orderId: string; customerId: string; contractType: 'VENDA' | 'LOCACAO'; documentKind: 'CONTRATO' | 'CHECKLIST'; templateKey: string; revision: number;
  externalRef: string; status: string; adapterStatus: string; envelopeId: string | null; validationCode: string | null; originalDocumentId: string;
  adapterDocumentId: string | null; signerLojaId: string | null; signerClienteId: string | null; sentBy: string | null; sentByName: string | null; sentByEmail: string | null;
  sendAttempts: number; payloadSnapshot: string; orderNumber: number; orderStatus: string;
@@ -128,7 +129,7 @@ type ContractRow = {
 async function loadContract(db: D1Database, tenantId: string, contractId: string): Promise<ContractRow> {
  const row = await db
   .prepare(
-   `SELECT c.id AS id, c.tenant_id AS tenantId, c.store_id AS storeId, c.order_id AS orderId, c.customer_id AS customerId, c.contract_type AS contractType, c.template_key AS templateKey,
+   `SELECT c.id AS id, c.tenant_id AS tenantId, c.store_id AS storeId, c.order_id AS orderId, c.customer_id AS customerId, c.contract_type AS contractType, c.document_kind AS documentKind, c.template_key AS templateKey,
            c.revision AS revision, c.external_ref AS externalRef, c.internal_status AS status, c.adapter_status AS adapterStatus, c.envelope_id AS envelopeId, c.validation_code AS validationCode,
            c.original_document_id AS originalDocumentId, c.adapter_document_id AS adapterDocumentId, c.signer_loja_id AS signerLojaId, c.signer_cliente_id AS signerClienteId,
            c.sent_by AS sentBy, c.sent_by_name AS sentByName, c.sent_by_email AS sentByEmail, c.send_attempts AS sendAttempts, c.payload_snapshot AS payloadSnapshot,
@@ -187,11 +188,15 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
  // contratos dos modelos do código usam a configuração da loja e os papéis "loja"/"cliente".
  const snapshotTemplate = (JSON.parse(contract.payloadSnapshot) as { template?: { signTemplateKey?: string | null; signatureRoles?: { company: string; client: string } | null } }).template ?? {};
  const roles = snapshotTemplate.signTemplateKey && snapshotTemplate.signatureRoles ? snapshotTemplate.signatureRoles : { company: 'loja', client: 'cliente' };
+ // Checklist de entrega: só com o modelo de assinatura escolhido no checklist da loja (o do contrato não serve).
+ if (contract.documentKind === 'CHECKLIST' && !snapshotTemplate.signTemplateKey) throw new RuleError('Escolha o modelo de assinatura do checklist em Minhas lojas > Checklist de entrega e gere o checklist de novo.', 409);
  const templateKey = snapshotTemplate.signTemplateKey || (contract.contractType === 'VENDA' ? config.motoTemplate : config.locacaoTemplate);
  if (!templateKey) throw new RuleError(`Escolha o modelo de assinatura do Adapter Sign no modelo de contrato da loja (Minhas lojas > Modelos de contrato) ou informe o de ${contract.contractType === 'VENDA' ? 'moto' : 'locação'} em Minhas lojas > Assinatura eletrônica.`, 409);
 
  // Representante da loja: quem envia pela primeira vez (retentativas mantêm o mesmo).
  let seller = contract.sentBy ? { id: contract.sentBy, name: contract.sentByName ?? '', email: contract.sentByEmail ?? '' } : null;
+ // Modelo sem papel da empresa (ex.: checklist assinado só pelo cliente): ninguém assina pela loja.
+ if (!seller && !roles.company && actor) seller = { id: actor.userId, name: actor.displayName, email: '' };
  if (!seller) {
   if (!actor) throw new RuleError('Envio sem vendedor identificado.', 409);
   const user = await db.prepare('SELECT display_name AS name, email FROM users WHERE id = ?').bind(actor.userId).first<{ name: string; email: string | null }>();
@@ -216,13 +221,13 @@ export async function sendContractForSignature(db: D1Database, tenantId: string,
  const doc = await db.prepare('SELECT storage_key AS storageKey FROM documents WHERE id = ? AND tenant_id = ?').bind(contract.originalDocumentId, tenantId).first<{ storageKey: string }>();
  if (!doc) throw new RuleError('PDF original do contrato não encontrado.', 404);
  const pdf = await deps.storage.get(doc.storageKey);
- const title = `${contract.contractType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${contract.orderNumber} - ${v['cliente.nome']}`.slice(0, 200);
+ const title = `${contract.documentKind === 'CHECKLIST' ? 'Checklist de entrega' : contract.contractType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${contract.orderNumber} - ${v['cliente.nome']}`.slice(0, 200);
  try {
   const sent = await clientFor(config, deps).sendFromTemplate(pdf, `${contract.externalRef}.pdf`, {
    template: templateKey,
    externalRef: contract.externalRef,
    title,
-   signers: [{ role: roles.company, name: seller.name, email: seller.email, externalId: seller.id }, clientSigner],
+   signers: roles.company ? [{ role: roles.company, name: seller.name, email: seller.email, externalId: seller.id }, clientSigner] : [clientSigner],
   });
   const loja = sent.signers.find((s) => s.role === roles.company);
   const cliente = sent.signers.find((s) => s.role === roles.client);
@@ -338,7 +343,7 @@ export async function syncContract(db: D1Database, tenantId: string, contractId:
   if (docInfo.finalSha256 && sha256Hex(finalPdf) !== docInfo.finalSha256) throw new RuleError('Hash do PDF assinado diverge do informado pelo Adapter Sign.',502);
   const who = { userId: contract.sentBy ?? 'adapter-sign', displayName: 'Adapter Sign' };
   const existing = async (type: string, bytes: Uint8Array) => db.prepare('SELECT id FROM documents WHERE tenant_id = ? AND contract_id = ? AND type = ? AND sha256 = ? AND deleted_at IS NULL').bind(tenantId,contractId,type,sha256Hex(bytes)).first<{id:string}>();
-  const signed = await existing('CONTRATO_ASSINADO',finalPdf) ?? await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'CONTRATO_ASSINADO', description: `Contrato assinado (${contract.externalRef})`, originalFilename: `${contract.externalRef}-assinado.pdf`, bytes: finalPdf, source: 'adapter_sign' }, who, now);
+  const signed = await existing('CONTRATO_ASSINADO',finalPdf) ?? await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'CONTRATO_ASSINADO', description: `${contract.documentKind === 'CHECKLIST' ? 'Checklist de entrega assinado' : 'Contrato assinado'} (${contract.externalRef})`, originalFilename: `${contract.externalRef}-assinado.pdf`, bytes: finalPdf, source: 'adapter_sign' }, who, now);
   const evidence = await existing('EVIDENCIA_ASSINATURA',evidencePdf) ?? await storeDocument(db, deps.storage, tenantId, { storeId: contract.storeId, customerId: contract.customerId, orderId: contract.orderId, contractId, type: 'EVIDENCIA_ASSINATURA', description: `Relatório de evidências Adapter Sign (${contract.externalRef})`, originalFilename: `${contract.externalRef}-evidencias.pdf`, bytes: evidencePdf, source: 'adapter_sign' }, who, now);
   await db
    .prepare("UPDATE contracts SET internal_status = 'COMPLETED', signed_document_id = ?, evidence_document_id = ?, signed_sha256 = ?, completed_at = ?, last_error = '', updated_at = ? WHERE id = ?")

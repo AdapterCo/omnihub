@@ -146,13 +146,13 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  if (template.ownerCnpj && digits(src.store.cnpj) !== template.ownerCnpj) {
   throw new RuleError(`O modelo "${template.title}" (v${template.version}) é da empresa ${template.ownerName}, CNPJ ${formatCnpj(template.ownerCnpj)}. A loja ${src.store.name} está com CNPJ ${formatCnpj(src.store.cnpj) || 'não informado'}. Cadastre o modelo de contrato desta loja em Minhas lojas > Modelos de contrato (a partir do PDF que a loja já usa), ou corrija o CNPJ da loja.`, 409);
  }
- const locked = await db.prepare(`SELECT id FROM contracts WHERE tenant_id = ? AND order_id = ? AND internal_status IN (${CONTRACT_LOCKING_STATUSES.map(() => '?').join(',')})`).bind(tenantId, orderId, ...CONTRACT_LOCKING_STATUSES).first<{ id: string }>();
+ const locked = await db.prepare(`SELECT id FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO' AND internal_status IN (${CONTRACT_LOCKING_STATUSES.map(() => '?').join(',')})`).bind(tenantId, orderId, ...CONTRACT_LOCKING_STATUSES).first<{ id: string }>();
  if (locked) throw new RuleError('Este pedido já tem contrato enviado para assinatura. Cancele o envio antes de gerar outro.', 409);
  const values = buildContractValues(template, src, now);
  const missing = missingFields(template, values);
  if (missing.length) throw new RuleError(`Não foi possível gerar o contrato. Preencha: ${missing.join(', ')}.`, 400);
 
- const count = await db.prepare('SELECT COUNT(*) AS n FROM contracts WHERE tenant_id = ? AND order_id = ?').bind(tenantId, orderId).first<{ n: number }>();
+ const count = await db.prepare("SELECT COUNT(*) AS n FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO'").bind(tenantId, orderId).first<{ n: number }>();
  const revision = Number(count?.n ?? 0) + 1;
  const externalRef = `pedido-${src.order.number}-${template.key}-v${template.version}-r${revision}`;
  const title = `${template.orderType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${src.order.number} - ${values['cliente.nome']}`;
@@ -174,7 +174,7 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
   rendering:{clientInitials}, order: { id: orderId, number: src.order.number, type: src.order.type }, storeId: src.store.id, values, generatedAt: now,
  });
  await db.batch([
-  db.prepare("UPDATE contracts SET internal_status = 'SUPERSEDED', updated_at = ? WHERE tenant_id = ? AND order_id = ? AND internal_status = 'GENERATED'").bind(now, tenantId, orderId),
+  db.prepare("UPDATE contracts SET internal_status = 'SUPERSEDED', updated_at = ? WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO' AND internal_status = 'GENERATED'").bind(now, tenantId, orderId),
   db.prepare(
    `INSERT INTO contracts (id, tenant_id, store_id, order_id, customer_id, contract_type, template_key, template_version, revision, external_ref, internal_status, original_document_id, original_sha256, payload_snapshot, generated_by, generated_by_name, generated_at, created_at, updated_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,'GENERATED',?,?,?,?,?,?,?,?)`,
@@ -188,7 +188,7 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  * dados mudaram); contrato já enviado para assinatura bloqueia a alteração.
  */
 export async function assertOrderContractsEditable(db: D1Database, tenantId: string, orderId: string): Promise<void> {
- const locked = await db.prepare(`SELECT id FROM contracts WHERE tenant_id = ? AND order_id = ? AND internal_status IN (${CONTRACT_LOCKING_STATUSES.map(() => '?').join(',')})`).bind(tenantId, orderId, ...CONTRACT_LOCKING_STATUSES).first<{ id: string }>();
+ const locked = await db.prepare(`SELECT id FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO' AND internal_status IN (${CONTRACT_LOCKING_STATUSES.map(() => '?').join(',')})`).bind(tenantId, orderId, ...CONTRACT_LOCKING_STATUSES).first<{ id: string }>();
  if (locked) throw new RuleError('Este pedido tem contrato enviado para assinatura; não pode ser alterado nem cancelado por aqui.', 409);
 }
 
@@ -196,13 +196,13 @@ export async function invalidateOrderContracts(db: D1Database, tenantId: string,
  await db.prepare(`UPDATE contracts SET internal_status = ?, updated_at = ? WHERE tenant_id = ? AND order_id = ? AND internal_status = 'GENERATED'`).bind(reason === 'ORDER_CANCELLED' ? 'CANCELLED' : 'SUPERSEDED', now, tenantId, orderId).run();
 }
 
-export type ContractRecord = { id: string; orderId: string; templateKey: string; templateVersion: number; revision: number; externalRef: string; status: string; adapterStatus: string; originalDocumentId: string; originalSha256: string; validationCode: string | null; generatedByName: string; generatedAt: number; sentAt: number | null; sentByName: string | null; completedAt: number | null; signedDocumentId: string | null; evidenceDocumentId: string | null; lastError: string };
+export type ContractRecord = { id: string; orderId: string; documentKind: 'CONTRATO' | 'CHECKLIST'; templateKey: string; templateVersion: number; revision: number; externalRef: string; status: string; adapterStatus: string; originalDocumentId: string; originalSha256: string; validationCode: string | null; generatedByName: string; generatedAt: number; sentAt: number | null; sentByName: string | null; completedAt: number | null; signedDocumentId: string | null; evidenceDocumentId: string | null; lastError: string };
 
 export async function listContracts(db: D1Database, tenantId: string, actor: Actor): Promise<ContractRecord[]> {
  if (!actor.permissions.has('ORDER_VIEW')) return [];
  const rows = await db
   .prepare(
-   `SELECT id, order_id AS orderId, store_id AS storeId, template_key AS templateKey, template_version AS templateVersion, revision, external_ref AS externalRef, internal_status AS status,
+   `SELECT id, order_id AS orderId, document_kind AS documentKind, store_id AS storeId, template_key AS templateKey, template_version AS templateVersion, revision, external_ref AS externalRef, internal_status AS status,
            original_document_id AS originalDocumentId, original_sha256 AS originalSha256, validation_code AS validationCode, generated_by_name AS generatedByName, generated_at AS generatedAt,
            adapter_status AS adapterStatus, sent_at AS sentAt, sent_by_name AS sentByName, completed_at AS completedAt, signed_document_id AS signedDocumentId, evidence_document_id AS evidenceDocumentId, last_error AS lastError
     FROM contracts WHERE tenant_id = ? ORDER BY generated_at DESC`,
@@ -212,4 +212,23 @@ export async function listContracts(db: D1Database, tenantId: string, actor: Act
  return (rows.results ?? [])
   .filter((c) => !actor.storeId || c.storeId === actor.storeId)
   .map(({ storeId: _s, ...c }) => ({ ...c, templateVersion: Number(c.templateVersion), revision: Number(c.revision), generatedAt: Number(c.generatedAt), sentAt: c.sentAt == null ? null : Number(c.sentAt), completedAt: c.completedAt == null ? null : Number(c.completedAt), lastError: c.lastError ?? '' }));
+}
+
+/**
+ * Dados do pedido para documentos ligados a ele (checklist de entrega): os mesmos valores do
+ * contrato (cliente, produto, pedido, loja), com a "garantia até" do contrato vigente do pedido —
+ * calculada com o prazo daquele contrato; sem contrato, fica vazia (nunca presumida).
+ */
+export async function orderDocumentValues(db: D1Database, tenantId: string, orderId: string, now: number): Promise<{ src: ContractSource; values: Record<string, string> }> {
+ const src = await loadSource(db, tenantId, orderId);
+ const row = await db
+  .prepare("SELECT payload_snapshot AS s FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO' AND internal_status NOT IN ('SUPERSEDED','CANCELLED') ORDER BY revision DESC LIMIT 1")
+  .bind(tenantId, orderId)
+  .first<{ s: string }>();
+ let contractValues: Record<string, string> | null = null;
+ try { contractValues = row ? (JSON.parse(row.s) as { values?: Record<string, string> }).values ?? null : null; } catch { contractValues = null; }
+ const base: ContractTemplate = { key: 'documento-pedido', version: 1, orderType: src.order.type, title: '', style: { titleSize: 13, titleAlign: 'center', titleBold: true, headingSize: 10.5, headingBold: true, bodySize: 9.5, justify: false, pageNumbers: false }, required: [], blocks: [] };
+ const values = buildContractValues(base, src, now);
+ values['pedido.garantia_ate'] = contractValues?.['pedido.garantia_ate'] ?? '';
+ return { src, values };
 }

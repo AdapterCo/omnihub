@@ -1,11 +1,12 @@
 'use client';
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
-import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus, FileSignature, Paperclip, Eye, Download } from 'lucide-react';
+import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus, FileSignature, Paperclip, Eye, Download, ClipboardCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableHeader, TableHead, TableBody, TableRow, TableCell } from '@/components/ui/table';
 import { money, date, type Snapshot, type OrderView, type UnitView, type StoreRecord, type ContractView, type DocumentView } from '@/lib/domain';
 import { OrderBilling } from './order-billing';
+import { ChecklistForm } from './checklists';
 
 // Aba Pedidos (venda com contrato de moto e locação) e painel de unidades com chassi/IMEI.
 // Toda regra fica no backend (lib/orders/service.ts); a tela só coleta e mostra os dados.
@@ -40,7 +41,7 @@ const CONTRACT_STATUS: Record<string, { label: string; tone: string }> = {
 // Status que ainda permitem gerar uma revisão nova do contrato (nada pendente no Adapter Sign).
 const REGENERABLE = ['GENERATED', 'CANCELLED', 'EXPIRED', 'DECLINED'];
 export function addMonthsKey(key: string, months: number): string { const [y, m, d] = key.split('-').map(Number); const dt = new Date(Date.UTC(y, m - 1 + months, 1)); const last = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth() + 1, 0)).getUTCDate(); return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(Math.min(d, last)).padStart(2, '0')}`; }
-const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign', BOLETOS: 'Boletos (arquivo único)' };
+const DOC_TYPE: Record<string, string> = { ANEXO: 'Anexo', CONTRATO_ORIGINAL: 'Contrato gerado automaticamente', CONTRATO_ASSINADO: 'Contrato assinado', EVIDENCIA_ASSINATURA: 'Relatório de evidências Adapter Sign', BOLETOS: 'Boletos (arquivo único)', CHECKLIST_ENTREGA: 'Checklist de entrega gerado' };
 const ACCEPT = 'application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png';
 
 const toCents = (v: string | undefined) => {
@@ -185,7 +186,8 @@ function OrderDetail({ order, contracts, documents, act, refresh, perms, busy, a
  return <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}><DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Pedido #{order.number} · {order.type === 'VENDA' ? 'Venda com contrato (moto)' : 'Locação'}</DialogTitle><DialogDescription><span className={'badge ' + (ORDER_STATUS[order.status]?.tone ?? 'neutral')}>{ORDER_STATUS[order.status]?.label ?? order.status}</span></DialogDescription></DialogHeader>
   <div className="stack">
    <div className="order-summary">{rows.map(([k, val]) => <div key={k}><span className="muted">{k}</span><strong>{val}</strong></div>)}</div>
-   <ContractSection order={order} contracts={contracts} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
+   <ContractSection order={order} contracts={contracts.filter((c) => c.documentKind !== 'CHECKLIST')} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
+   <ContractSection kind="CHECKLIST" order={order} contracts={contracts.filter((c) => c.documentKind === 'CHECKLIST')} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
    <DocumentsSection order={order} documents={documents} act={act} refresh={refresh} perms={perms} busy={busy} active={active} />
    <OrderBilling order={order} perms={perms} active={active} refresh={refresh} />
    <section><h3 className="section-title"><MessageSquare size={16} /> Observações</h3>
@@ -215,7 +217,10 @@ async function signatureAction(contractId: string, action: 'send' | 'link' | 're
  return { ok: r.ok, data };
 }
 
-function ContractSection({ order, contracts, act, refresh, perms, busy, active }: { order: OrderView; contracts: ContractView[]; act: Act; refresh: () => Promise<unknown>; perms: Set<string>; busy: boolean; active: boolean }) {
+// Mesma seção para o contrato e para o checklist de entrega (kind="CHECKLIST"): os dois usam o
+// mesmo fluxo de assinatura; no checklist, "gerar" é o formulário de marcação dos itens.
+function ContractSection({ order, contracts, act, refresh, perms, busy, active, kind = 'CONTRATO' }: { order: OrderView; contracts: ContractView[]; act: Act; refresh: () => Promise<unknown>; perms: Set<string>; busy: boolean; active: boolean; kind?: 'CONTRATO' | 'CHECKLIST' }) {
+ const checklist = kind === 'CHECKLIST';
  const [history, setHistory] = useState(false);
  const [working, setWorking] = useState(false);
  const [error, setError] = useState('');
@@ -237,28 +242,30 @@ function ContractSection({ order, contracts, act, refresh, perms, busy, active }
   } finally { setWorking(false); }
  };
  const copy = async () => { if (!link) return; try { await navigator.clipboard.writeText(link.url); setCopied(true); } catch { setCopied(false); } };
- const templateLabel = order.type === 'VENDA' ? 'Contrato de compra e venda (moto)' : 'Contrato de locação com opção de compra';
- return <section><h3 className="section-title"><FileSignature size={16} /> Contrato</h3>
+ const templateLabel = checklist ? 'Checklist de entrega (assinado pelo cliente na entrega)' : order.type === 'VENDA' ? 'Contrato de compra e venda (moto)' : 'Contrato de locação com opção de compra';
+ const statusLabel = (status: string) => (checklist && status === 'COMPLETED' ? 'Checklist assinado' : CONTRACT_STATUS[status]?.label ?? status);
+ return <section><h3 className="section-title">{checklist ? <ClipboardCheck size={16} /> : <FileSignature size={16} />} {checklist ? 'Checklist de entrega' : 'Contrato'}</h3>
   <div className="notice" style={{ marginBottom: 8 }}>
-   <div><strong>{templateLabel}</strong>{current && <> · modelo {current.templateKey} v{current.templateVersion}, revisão {current.revision}</>}</div>
+   <div><strong>{templateLabel}</strong>{current && (checklist ? <> · revisão {current.revision}</> : <> · modelo {current.templateKey} v{current.templateVersion}, revisão {current.revision}</>)}</div>
    {current ? <div className="stack" style={{ gap: 6, marginTop: 6 }}>
-    <div><span className={'badge ' + (CONTRACT_STATUS[current.status]?.tone ?? 'neutral')}>{CONTRACT_STATUS[current.status]?.label ?? current.status}</span></div>
+    <div><span className={'badge ' + (CONTRACT_STATUS[current.status]?.tone ?? 'neutral')}>{statusLabel(current.status)}</span></div>
     <div className="muted">Gerado por {current.generatedByName} em {date(current.generatedAt)} · referência {current.externalRef}{current.validationCode ? ` · código de validação ${current.validationCode}` : ''}</div>
     <div className="muted" style={{ wordBreak: 'break-all' }}>SHA-256 do PDF original: {current.originalSha256}</div>
     {current.sentAt && <div className="muted">Enviado por {current.sentByName} em {date(current.sentAt)} (a loja assina no envio, em nome de quem enviou)</div>}
     {current.completedAt && <div className="muted">Assinado em {date(current.completedAt)}. Conferência pública: sign.adapterco.com.br/verify{current.validationCode ? ` (código ${current.validationCode})` : ''}</div>}
     {current.lastError && current.status !== 'COMPLETED' && <div className="notice error" style={{ margin: 0 }}>{current.lastError}</div>}
-   </div> : <p className="muted" style={{ marginTop: 6 }}>Nenhum contrato gerado. Confira os dados do pedido e do cliente e gere o PDF para revisar antes do envio.</p>}
+   </div> : <p className="muted" style={{ marginTop: 6 }}>{checklist ? 'Nenhum checklist gerado. Na entrega, marque os itens conferidos e gere o PDF para o cliente assinar.' : 'Nenhum contrato gerado. Confira os dados do pedido e do cliente e gere o PDF para revisar antes do envio.'}</p>}
    <div className="inline flex-wrap" style={{ gap: 6, marginTop: 10 }}>
     {current && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.originalDocumentId), '_blank', 'noopener')}><Eye size={15} /> Visualizar PDF</Button>}
-    {canGenerate && <Button size="sm" variant={current ? 'outline' : 'default'} disabled={busy || working || !active} onClick={() => void act({ type: 'contract.generate', orderId: order.id })}><FileSignature size={15} /> {current ? 'Gerar nova revisão' : 'Gerar contrato'}</Button>}
+    {canGenerate && !checklist && <Button size="sm" variant={current ? 'outline' : 'default'} disabled={busy || working || !active} onClick={() => void act({ type: 'contract.generate', orderId: order.id })}><FileSignature size={15} /> {current ? 'Gerar nova revisão' : 'Gerar contrato'}</Button>}
     {current && perms.has('ORDER_CREATE') && (current.status === 'GENERATED' || current.status === 'SENDING') && <Button size="sm" disabled={working || !active} onClick={() => void run('send')}><FileSignature size={15} /> {current.status === 'SENDING' ? 'Tentar enviar de novo' : 'Enviar para assinatura'}</Button>}
     {current?.status === 'SENT' && perms.has('ORDER_CREATE') && <Button variant="outline" size="sm" disabled={working || !active} onClick={() => void run('link')}>Gerar novo link para o cliente</Button>}
     {current && ['SENT', 'CLIENT_SIGNED', 'FINALIZING'].includes(current.status) && <Button variant="outline" size="sm" disabled={working} onClick={() => void run('refresh')}>Atualizar situação</Button>}
     {current && ['SENT', 'CLIENT_SIGNED'].includes(current.status) && perms.has('ORDER_CANCEL') && <Button variant="outline" size="sm" disabled={working || !active} onClick={() => setCancelReason('')}><X size={15} /> Cancelar assinatura</Button>}
-    {current?.signedDocumentId && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.signedDocumentId!), '_blank', 'noopener')}><Eye size={15} /> Contrato assinado</Button>}
+    {current?.signedDocumentId && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.signedDocumentId!), '_blank', 'noopener')}><Eye size={15} /> {checklist ? 'Checklist assinado' : 'Contrato assinado'}</Button>}
     {current?.evidenceDocumentId && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.evidenceDocumentId!), '_blank', 'noopener')}><Eye size={15} /> Evidências</Button>}
    </div>
+   {checklist && canGenerate && <ChecklistForm order={order} onGenerated={refresh} disabled={busy || working || !active} />}
    {working && <p className="muted" style={{ marginTop: 8 }}>Falando com o Adapter Sign...</p>}
    {error && <p className="notice error" style={{ marginTop: 8, marginBottom: 0 }}>{error}</p>}
    {link && <div className="stack" style={{ gap: 6, marginTop: 10 }}>

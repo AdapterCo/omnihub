@@ -9,13 +9,15 @@ export const dynamic = 'force-dynamic';
 const reply = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
 
 /** Modelos de assinatura do Adapter Sign da loja (busca ao vivo com a API key salva da loja). */
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
  try {
   const { id } = await params;
   if (!/^[A-Za-z0-9-]{1,80}$/.test(id)) return reply({ error: 'Loja inválida.' }, 400);
   const session = await resolveWorkspaceSession();
   if (!session) return reply({ error: 'Sessão encerrada. Entre novamente.', signIn: true }, 401);
-  const templates = await listSignatureTemplates(database(), session.tenantId, id, session.actor, signatureDepsFromEnv());
+  // ?for=checklist: o checklist de entrega pode ser assinado só pelo cliente (sem papel da empresa).
+  const clientOnlyAllowed = new URL(request.url).searchParams.get('for') === 'checklist';
+  const templates = await listSignatureTemplates(database(), session.tenantId, id, session.actor, signatureDepsFromEnv(), { clientOnlyAllowed });
   return reply({ templates });
  } catch (error) {
   if (error instanceof RuleError) return reply({ error: error.message }, error.status);
