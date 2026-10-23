@@ -7,7 +7,7 @@ import { storageFromEnv } from '@/lib/storage';
 import { recordAudit } from '@/lib/audit/service';
 import { logger } from '@/lib/log';
 import { CONTRACT_FIELDS } from '@/lib/contracts/fields';
-import { archiveContractModel, listContractModels, newContractModelVersion, publishContractModel, saveContractModel, type ContractModelInput } from '@/lib/contracts/models';
+import { archiveContractModel, deleteContractModel, listContractModels, newContractModelVersion, publishContractModel, saveContractModel, type ContractModelInput } from '@/lib/contracts/models';
 
 export const dynamic = 'force-dynamic';
 const reply = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'private, no-store' } });
@@ -60,6 +60,11 @@ export async function POST(request: Request) {
   if (body.action === 'archive') {
    await archiveContractModel(db, tenantId, id, actor);
    await audit('contract_model.archive', 'Modelo de contrato arquivado', id);
+   return reply({ ok: true });
+  }
+  if (body.action === 'delete') {
+   const removed = await deleteContractModel(db, tenantId, id, actor);
+   await audit('contract_model.delete', `Modelo de contrato apagado: ${removed.name} v${removed.version}`, id);
    return reply({ ok: true });
   }
   return reply({ error: 'Ação inválida.' }, 400);

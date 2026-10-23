@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Eye, FileUp, LoaderCircle, Plus, RefreshCw, Send } from 'lucide-react';
+import { Eye, FileUp, LoaderCircle, Plus, RefreshCw, Send, Trash2 } from 'lucide-react';
 import type { StoreRecord } from '@/lib/domain';
 import type { ContractField } from '@/lib/contracts/fields';
 
@@ -190,7 +190,7 @@ export function ContractModelsDialog({ store, onClose }: { store: StoreRecord; o
       <Button size="sm" variant="outline" onClick={() => window.open(`/api/contract-models/${m.id}/preview`, '_blank', 'noopener,noreferrer')}><Eye size={14} /> Ver</Button>
       {m.status === 'DRAFT' && <Button size="sm" onClick={() => { setWarnings([]); setForm(toForm(m)); }}>Editar</Button>}
       {m.status !== 'DRAFT' && <Button size="sm" variant="outline" disabled={busy} onClick={() => void action({ action: 'newVersion', id: m.id }, 'Rascunho da nova versão criado.')}>Nova versão</Button>}
-      {m.status === 'DRAFT' && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void action({ action: 'archive', id: m.id }, 'Rascunho descartado.')}>Descartar</Button>}
+      {m.status !== 'PUBLISHED' && <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (window.confirm(`Apagar "${m.name}" v${m.version}? Contratos já gerados com ele não mudam. Esta ação não pode ser desfeita.`)) void action({ action: 'delete', id: m.id }, 'Modelo apagado.'); }}><Trash2 size={14} /> Apagar</Button>}
       {m.status === 'PUBLISHED' && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void action({ action: 'archive', id: m.id }, 'Modelo arquivado: novos contratos voltam ao modelo padrão do sistema, se houver.')}>Arquivar</Button>}
      </span>
     </div>)}</div>}

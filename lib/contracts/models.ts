@@ -158,6 +158,19 @@ export async function archiveContractModel(db: D1Database, tenantId: string, id:
  await db.prepare("UPDATE contract_models SET status = 'ARCHIVED', updated_at = ? WHERE id = ?").bind(now, id).run();
 }
 
+/**
+ * Apagar modelo (rascunho ou arquivado). O publicado ("Em uso") gera os novos contratos: arquive antes.
+ * Contratos já gerados não dependem deste registro (guardam o próprio texto e as condições no snapshot).
+ * O arquivo do logo fica guardado: versões do mesmo modelo compartilham a mesma chave.
+ */
+export async function deleteContractModel(db: D1Database, tenantId: string, id: string, actor: Actor): Promise<{ name: string; version: number }> {
+ const row = await load(db, tenantId, id);
+ manage(actor, row.storeId);
+ if (row.status === 'PUBLISHED') throw new RuleError('Este modelo está em uso nos novos contratos. Arquive antes de apagar.', 409);
+ await db.prepare("DELETE FROM contract_models WHERE id = ? AND tenant_id = ? AND status IN ('DRAFT','ARCHIVED')").bind(id, tenantId).run();
+ return { name: row.name, version: Number(row.version) };
+}
+
 const IMAGE_KINDS = [
  { mime: 'image/png', ext: 'png', test: (b: Uint8Array) => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
  { mime: 'image/jpeg', ext: 'jpg', test: (b: Uint8Array) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },

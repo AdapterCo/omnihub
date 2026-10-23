@@ -13,7 +13,7 @@ import { generateContract } from '../lib/contracts/service.ts';
 import { readDocument } from '../lib/documents/service.ts';
 import { createLocalStorage } from '../lib/storage/index.ts';
 import { extractContractText } from '../lib/contracts/extract.ts';
-import { parseModelBody, saveContractModel, publishContractModel, newContractModelVersion, listContractModels, previewContractModel, publishedTemplateFor } from '../lib/contracts/models.ts';
+import { parseModelBody, saveContractModel, publishContractModel, newContractModelVersion, listContractModels, previewContractModel, publishedTemplateFor, deleteContractModel } from '../lib/contracts/models.ts';
 import { suspiciousFixedData } from '../lib/contracts/fields.ts';
 import { rentalConditions } from '../lib/billing/service.ts';
 import { saveSignatureConfig, listSignatureTemplates, sendContractForSignature } from '../lib/signature/service.ts';
@@ -157,6 +157,24 @@ test('nova versão: rascunho copiado, publicar arquiva a anterior; contratos nov
  const template = await publishedTemplateFor(f.db, f.storage, f.tenantId, f.store, 'LOCACAO');
  assert.equal(template?.version, 2);
  assert.equal(template?.conditions?.fineBp, 200);
+});
+
+test('apagar modelo: rascunho e arquivado saem da lista; o publicado (em uso) não; contrato já gerado não muda', async () => {
+ const f = await fixture();
+ const v1 = await f.draft();
+ await publishContractModel(f.db, f.storage, f.tenantId, v1, { confirmFixedData: true }, f.owner, NOW);
+ const contract = await generateContract(f.db, f.storage, f.tenantId, await f.rentOrder(), f.seller, NOW);
+ const v2 = await newContractModelVersion(f.db, f.tenantId, v1, f.owner, NOW);
+ await publishContractModel(f.db, f.storage, f.tenantId, v2, { confirmFixedData: true }, f.owner, NOW);
+ const v3 = await newContractModelVersion(f.db, f.tenantId, v2, f.owner, NOW);
+ await assert.rejects(() => deleteContractModel(f.db, f.tenantId, v2, f.owner), /em uso/);
+ await assert.rejects(() => deleteContractModel(f.db, f.tenantId, v1, f.seller), /permissão/);
+ await deleteContractModel(f.db, f.tenantId, v1, f.owner);
+ await deleteContractModel(f.db, f.tenantId, v3, f.owner);
+ assert.deepEqual((await listContractModels(f.db, f.tenantId, f.store, f.owner)).map((m) => [m.version, m.status]), [[2, 'PUBLISHED']]);
+ await assert.rejects(() => deleteContractModel(f.db, f.tenantId, v1, f.owner), /não encontrado/);
+ // O contrato gerado com a v1 continua com o próprio PDF.
+ assert.ok((await readDocument(f.db, f.storage, f.tenantId, contract.documentId, f.seller)).bytes.length > 1000);
 });
 
 /**
