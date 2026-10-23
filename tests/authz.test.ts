@@ -40,10 +40,10 @@ test('OPERADOR_CAIXA vende e opera o próprio caixa, mas não administra loja/pr
  for (const code of ['STORE_CREATE', 'STORE_EDIT', 'PRODUCT_CREATE', 'PRODUCT_EDIT', 'PRODUCT_DELETE', 'STOCK_ADJUST', 'STOCK_TRANSFER', 'FISCAL_ISSUE', 'FISCAL_CANCEL', 'USER_CREATE', 'USER_EDIT'] satisfies PermissionCode[]) assert.ok(!perms.has(code), code);
 });
 
-test('ESTOQUISTA movimenta estoque, mas não vende, não abre caixa e não administra loja', () => {
+test('ESTOQUISTA movimenta estoque e cadastra produto, mas não exclui produto, não vende, não abre caixa e não administra loja', () => {
  const perms = permissionsForRole('ESTOQUISTA');
- for (const code of ['STOCK_VIEW', 'STOCK_ADJUST', 'STOCK_TRANSFER'] satisfies PermissionCode[]) assert.ok(perms.has(code), code);
- for (const code of ['SALE_CREATE', 'CASH_OPEN', 'STORE_CREATE', 'STORE_EDIT', 'FISCAL_ISSUE', 'USER_CREATE'] satisfies PermissionCode[]) assert.ok(!perms.has(code), code);
+ for (const code of ['STOCK_VIEW', 'STOCK_ADJUST', 'STOCK_TRANSFER', 'PRODUCT_CREATE', 'PRODUCT_EDIT'] satisfies PermissionCode[]) assert.ok(perms.has(code), code);
+ for (const code of ['PRODUCT_DELETE', 'SALE_CREATE', 'CASH_OPEN', 'STORE_CREATE', 'STORE_EDIT', 'FISCAL_ISSUE', 'USER_CREATE'] satisfies PermissionCode[]) assert.ok(!perms.has(code), code);
 });
 
 test('GERENTE opera catálogo e caixa, mas não emite/cancela documento fiscal nem cria/edita loja', () => {
@@ -65,4 +65,13 @@ test('Sem vínculo migrado, cai no mapeamento do papel legado (admin -> OWNER, o
  const db = fakeD1(new Map());
  assert.deepEqual([...(await loadPermissions(db, 'legacy-admin', 'tenant-a', 'admin'))].sort(), [...permissionsForRole('OWNER')].sort());
  assert.deepEqual([...(await loadPermissions(db, 'legacy-op', 'tenant-a', 'operator'))].sort(), [...permissionsForRole('OPERADOR_CAIXA')].sort());
+});
+
+test('banco: o papel ESTOQUISTA recebe criar/editar produto pela migração (excluir continua fora)', async () => {
+ const { createFakeD1 } = await import('./helpers/fakeD1.ts');
+ const db = createFakeD1();
+ const rows = await db.prepare("SELECT permission_id AS p FROM role_permissions WHERE role_id = 'ROLE_ESTOQUISTA'").bind().all<{ p: string }>();
+ const granted = new Set((rows.results ?? []).map((r) => r.p));
+ for (const code of ROLE_PERMISSIONS.ESTOQUISTA) assert.ok(granted.has(code), code);
+ assert.ok(!granted.has('PRODUCT_DELETE'));
 });
