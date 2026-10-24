@@ -218,3 +218,37 @@ test('comandos order.* pela API: criação, observação, finalização e audito
     const logs = (await f.db.prepare("SELECT description FROM audit_logs WHERE entity = 'order' AND entity_id = ? ORDER BY created_at").bind(orderId).all<{ description: string }>()).results?.map((r) => r.description);
     assert.deepEqual(logs, ['Pedido de venda criado (unidade reservada)', 'Observação adicionada ao pedido', 'Pedido finalizado na loja (venda gerada)']);
 });
+
+test('aparelho à vista no PDV: escolhe o IMEI, unidade vendida e estoque baixado; cancelar devolve; sem IMEI/preço/disponível bloqueia', async () => {
+    const f = await fixture();
+    await updateStore(f.db, f.tenantId, f.cellStore, { name: 'Grupo Cell', modalities: ['LOCACAO', 'PDV'] } as never, f.owner);
+    const u1 = await registerUnit(f.db, f.tenantId, { storeId: f.cellStore, productId: f.phone, serial: '356938035643809', color: 'Azul', memory: '128 GB', condition: 'Seminovo' }, f.owner, NOW);
+    const u2 = await registerUnit(f.db, f.tenantId, { storeId: f.cellStore, productId: f.phone, serial: '490154203237518', color: 'Preto', memory: '128 GB', condition: 'Novo' }, f.owner, NOW);
+    await openSession(f.db, f.tenantId, f.cellStore, 0, f.owner, NOW);
+    const sale = (items: { productId: string; qty: number; unitId?: string }[], payment = 'Pix') => createSale(f.db, f.tenantId, { storeId: f.cellStore, items, customer: 'Cliente Balcão', document: '', payment }, f.owner, NOW);
+    // Sem preço à vista no cadastro: bloqueia com explicação.
+    await assert.rejects(() => sale([{ productId: f.phone, qty: 1, unitId: u1 }]), /preço de venda à vista/);
+    await updateProduct(f.db, f.tenantId, f.phone, { name: 'iPhone 13', sku: 'IPH-13', price: 250000, cost: 0, minimum: 0, unit: 'UN' } as never, f.owner);
+    await assert.rejects(() => sale([{ productId: f.phone, qty: 1 }]), /Escolha o IMEI/);
+    await assert.rejects(() => sale([{ productId: f.phone, qty: 2, unitId: u1 }]), /Escolha o IMEI/);
+    await assert.rejects(() => sale([{ productId: f.shirt, qty: 1, unitId: u1 }]), /não é vendido por unidade/);
+    // Dois aparelhos do mesmo modelo na mesma venda, cada um com o IMEI.
+    const saleId = await sale([{ productId: f.phone, qty: 1, unitId: u1 }, { productId: f.phone, qty: 1, unitId: u2 }], 'Cartão de débito');
+    assert.equal((await f.unitStatus(u1))?.status, 'SOLD');
+    assert.equal((await f.unitStatus(u2))?.status, 'SOLD');
+    assert.equal(await f.count(f.cellStore, f.phone), 0);
+    const row = await f.db.prepare('SELECT total FROM sales WHERE id = ?').bind(saleId).first<{ total: number }>();
+    assert.equal(Number(row?.total), 500000);
+    const serials = (await f.db.prepare('SELECT unit_serial AS s FROM sale_items WHERE sale_id = ? ORDER BY unit_serial').bind(saleId).all<{ s: string }>()).results?.map((r) => r.s);
+    assert.deepEqual(serials, ['356938035643809', '490154203237518']);
+    // Já vendido: não entra em outra venda nem em pedido de locação.
+    await assert.rejects(() => sale([{ productId: f.phone, qty: 1, unitId: u1 }]), /não está disponível/);
+    // Devolução por item não controla o IMEI: o caminho é cancelar a venda.
+    await assert.rejects(() => returnSale(f.db, f.tenantId, { saleId, items: [{ productId: f.phone, qty: 1, restock: true }], refundMethod: 'Cartão de débito', reason: 'Desistiu' }, f.owner, NOW), /Cancelar venda/);
+    await cancelSale(f.db, f.tenantId, saleId, f.owner, NOW);
+    assert.equal((await f.unitStatus(u1))?.status, 'AVAILABLE');
+    assert.equal((await f.unitStatus(u2))?.status, 'AVAILABLE');
+    assert.equal(await f.count(f.cellStore, f.phone), 2);
+    // Moto continua só por pedido.
+    await assert.rejects(() => createSale(f.db, f.tenantId, { storeId: f.cellStore, items: [{ productId: f.moto, qty: 1 }], customer: '', document: '', payment: 'Dinheiro' }, f.owner, NOW), /vendido por pedido/);
+});

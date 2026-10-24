@@ -21,7 +21,7 @@ type PaymentLine = { method: string; amount: number };
 export async function createSale(
  db: D1Database,
  tenantId: string,
- params: { storeId: string; items: { productId: string; qty: number }[]; customer: string; document: string; payment?: string; payments?: PaymentLine[]; discount?: DiscountRequest; authorization?: SupervisorAuthorization },
+ params: { storeId: string; items: { productId: string; qty: number; unitId?: string }[]; customer: string; document: string; payment?: string; payments?: PaymentLine[]; discount?: DiscountRequest; authorization?: SupervisorAuthorization },
  actor: Actor,
  now = Date.now(),
  // Pagamento integrado (lib/payments): a venda nasce PENDING_PAYMENT (§17) com o estoque já
@@ -39,20 +39,34 @@ export async function createSale(
  if (params.discount && options.fromOrder) throw new RuleError('Desconto de pedido é negociado no valor do pedido.', 400);
  const session = await findOpenSessionForUser(db, tenantId, params.storeId, actor.userId);
  if (!session) throw new RuleError('Abra seu caixa nesta loja antes de vender.', 409);
- const ids = new Set(params.items.map((x) => x.productId));
+ // Aparelho com IMEI entra uma linha por unidade: o mesmo produto pode repetir com unidades diferentes.
+ const ids = new Set(params.items.map((x) => `${x.productId}:${x.unitId ?? ''}`));
  if (ids.size !== params.items.length) throw new RuleError('Produtos repetidos no carrinho.');
 
- const items: { productId: string; name: string; sku: string; qty: number; price: number }[] = [];
- const stockAdjustments: { storeId: string; productId: string; qty: number }[] = [];
+ const items: { productId: string; name: string; sku: string; qty: number; price: number; unitId: string | null; serial: string }[] = [];
+ const stockByProduct = new Map<string, number>();
  for (const item of params.items) {
   const product = await getProductForSale(db, tenantId, item.productId);
   if (!product) throw new RuleError('Produto não encontrado.', 404);
-  // Moto/locação têm unidade física (chassi/IMEI): só saem por pedido, nunca pela quantidade avulsa do PDV.
-  if (product.kind !== 'COMUM' && !options.fromOrder) throw new RuleError(`${product.name} é vendido por pedido (aba Pedidos), com o chassi/IMEI da unidade.`, 409);
+  let unit: { id: string; serial: string } | null = null;
+  if (!options.fromOrder && product.kind === 'MOTO') throw new RuleError(`${product.name} é vendido por pedido (aba Pedidos), com o chassi da unidade.`, 409);
+  if (!options.fromOrder && product.kind === 'LOCACAO') {
+   // Aparelho à vista no PDV: sempre uma unidade escolhida pelo IMEI, com o preço à vista do cadastro.
+   if (!item.unitId || item.qty !== 1) throw new RuleError(`Escolha o IMEI do aparelho ${product.name} para vender.`, 400);
+   if (!(Number(product.price) > 0)) throw new RuleError(`${product.name} não tem preço de venda à vista. Informe o preço em Produtos e estoque > Editar.`, 409);
+   const row = await db.prepare('SELECT id, serial, status, store_id AS storeId, product_id AS productId FROM product_units WHERE id = ? AND tenant_id = ?').bind(item.unitId, tenantId).first<{ id: string; serial: string; status: string; storeId: string; productId: string }>();
+   if (!row || row.productId !== product.id) throw new RuleError('Unidade (IMEI) não encontrada para este aparelho.', 404);
+   if (row.storeId !== params.storeId) throw new RuleError(`O IMEI ${row.serial} está em outra loja.`, 409);
+   if (row.status !== 'AVAILABLE') throw new RuleError(`O IMEI ${row.serial} não está disponível (reservado, locado ou vendido).`, 409);
+   unit = { id: row.id, serial: row.serial };
+  } else if (item.unitId) {
+   throw new RuleError(`${product.name} não é vendido por unidade (IMEI).`, 400);
+  }
   const price = options.fromOrder ? options.fromOrder.unitPrice : product.price;
-  items.push({ productId: product.id, name: product.name, sku: product.sku, qty: item.qty, price });
-  stockAdjustments.push({ storeId: params.storeId, productId: product.id, qty: item.qty });
+  items.push({ productId: product.id, name: product.name, sku: product.sku, qty: item.qty, price, unitId: unit?.id ?? null, serial: unit?.serial ?? '' });
+  stockByProduct.set(product.id, (stockByProduct.get(product.id) ?? 0) + item.qty);
  }
+ const stockAdjustments = [...stockByProduct].map(([productId, qty]) => ({ storeId: params.storeId, productId, qty }));
  const gross = items.reduce((a, i) => a + i.price * i.qty, 0);
  if (!Number.isSafeInteger(gross) || gross > 100000000) throw new RuleError('Valor da venda excede o limite.');
 
@@ -74,13 +88,27 @@ export async function createSale(
  if (paymentsTotal !== total) throw new RuleError('A soma dos pagamentos não confere com o total da venda.');
 
  const id = crypto.randomUUID();
+ // Reserva as unidades (IMEI) antes de gravar: duas vendas simultâneas não levam o mesmo aparelho.
+ const claimedUnits: string[] = [];
+ const releaseUnits = async () => {
+  for (const unitId of claimedUnits) await db.prepare("UPDATE product_units SET status = 'AVAILABLE', sale_id = NULL, updated_at = ? WHERE id = ? AND sale_id = ?").bind(now, unitId, id).run();
+ };
+ for (const item of items) {
+  if (!item.unitId) continue;
+  const claimed = await db.prepare("UPDATE product_units SET status = 'SOLD', sale_id = ?, updated_at = ? WHERE id = ? AND tenant_id = ? AND status = 'AVAILABLE'").bind(id, now, item.unitId, tenantId).run();
+  if (claimed.meta.changes !== 1) {
+   await releaseUnits();
+   throw new RuleError(`O IMEI ${item.serial} acabou de ser usado em outra operação. Escolha outra unidade.`, 409);
+  }
+  claimedUnits.push(item.unitId);
+ }
  const stockStatements = await buildSaleStockStatements(db, tenantId, stockAdjustments, actor.userId, id, {}, now);
  const insertStatements = [
   db
    .prepare('INSERT INTO sales (id, tenant_id, store_id, store_name, store_cnpj, cash_session_id, user_id, operator, customer, document, status, total, print_count, created_at, discount, discount_reason, discount_granted_by, discount_authorized_by, discount_authorized_by_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)')
    .bind(id, tenantId, store.id, store.name, store.cnpj, session.id, actor.userId, actor.displayName, params.customer, params.document, options.pendingPayment ? 'PENDING_PAYMENT' : 'COMPLETED', total, now, discount, discount ? (params.discount?.reason ?? '').trim() : '', discount ? actor.userId : null, authorizedBy?.userId ?? null, authorizedBy?.name ?? ''),
   db.prepare('INSERT INTO non_fiscal_receipts (id, sale_id, created_at) VALUES (?,?,?)').bind(crypto.randomUUID(), id, now),
-  ...items.map((item, index) => db.prepare('INSERT INTO sale_items (id, sale_id, product_id, name, sku, qty, price, discount) VALUES (?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), id, item.productId, item.name, item.sku, item.qty, item.price, itemDiscounts[index])),
+  ...items.map((item, index) => db.prepare('INSERT INTO sale_items (id, sale_id, product_id, name, sku, qty, price, discount, unit_id, unit_serial) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(), id, item.productId, item.name, item.sku, item.qty, item.price, itemDiscounts[index], item.unitId, item.serial)),
   ...payments.map((payment) => db.prepare('INSERT INTO sale_payments (id, sale_id, method, amount) VALUES (?,?,?,?)').bind(crypto.randomUUID(), id, payment.method, payment.amount)),
  ];
  // Fase 3: venda e estoque são ambos relacionais agora, então cabem numa única
@@ -89,6 +117,7 @@ export async function createSale(
  try {
   await db.batch([...stockStatements, ...insertStatements]);
  } catch {
+  await releaseUnits();
   throw new RuleError('Estoque insuficiente para esta operação.', 409);
  }
  return id;
@@ -141,8 +170,15 @@ export async function cancelSale(db: D1Database, tenantId: string, id: string, a
  const items = await db.prepare('SELECT product_id AS productId, qty FROM sale_items WHERE sale_id = ?').bind(id).all<{ productId: string; qty: number }>();
  await applySaleStockBatch(db, tenantId, (items.results ?? []).map((i) => ({ storeId: sale.store_id, productId: i.productId, qty: i.qty })), actor.userId, id, { reverse: true }, now);
  await db.prepare("UPDATE sales SET status = 'CANCELLED' WHERE id = ?").bind(id).run();
+ // Aparelho vendido à vista no PDV: a unidade (IMEI) volta a ficar disponível.
+ await releaseSaleUnits(db, tenantId, id, now);
  // Venda que veio de pedido: a unidade (chassi) volta a ficar disponível e o pedido fica cancelado.
  await releaseOrderForCancelledSale(db, tenantId, id, actor, now);
+}
+
+/** Unidades (IMEI) vendidas à vista no PDV voltam a ficar disponíveis (cancelamento da venda ou da cobrança). */
+export async function releaseSaleUnits(db: D1Database, tenantId: string, saleId: string, now = Date.now()): Promise<void> {
+ await db.prepare("UPDATE product_units SET status = 'AVAILABLE', sale_id = NULL, updated_at = ? WHERE tenant_id = ? AND sale_id = ? AND status = 'SOLD'").bind(now, tenantId, saleId).run();
 }
 
 export type SaleListOptions = {
@@ -184,7 +220,7 @@ export async function listSalesForSnapshot(db: D1Database, tenantId: string, opt
    }
    return out;
   };
-  const itemRows = { results: await inBatches<{ id: string; saleId: string; productId: string; name: string; sku: string; qty: number; price: number; discount: number }>((m) => `SELECT si.id AS id, si.sale_id AS saleId, si.product_id AS productId, si.name AS name, si.sku AS sku, si.qty AS qty, si.price AS price, si.discount AS discount FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.tenant_id = ? AND si.sale_id IN (${m})`) };
+  const itemRows = { results: await inBatches<{ id: string; saleId: string; productId: string; name: string; sku: string; qty: number; price: number; discount: number; serial: string | null }>((m) => `SELECT si.id AS id, si.sale_id AS saleId, si.product_id AS productId, si.name AS name, si.sku AS sku, si.qty AS qty, si.price AS price, si.discount AS discount, si.unit_serial AS serial FROM sale_items si JOIN sales s ON s.id = si.sale_id WHERE s.tenant_id = ? AND si.sale_id IN (${m})`) };
   const paymentRows = { results: await inBatches<{ saleId: string; method: string }>((m) => `SELECT sp.sale_id AS saleId, sp.method AS method FROM sale_payments sp JOIN sales s ON s.id = sp.sale_id WHERE s.tenant_id = ? AND sp.sale_id IN (${m})`) };
   const returnRows = { results: (await inBatches<{ id: string; saleId: string; operator: string; reason: string; refundMethod: string; total: number; createdAt: number }>((m) => `SELECT id, sale_id AS saleId, operator, reason, refund_method AS refundMethod, total, created_at AS createdAt FROM sale_returns WHERE tenant_id = ? AND sale_id IN (${m})`)).sort((a, b) => Number(a.createdAt) - Number(b.createdAt)) };
   const returnItemRows = { results: await inBatches<{ returnId: string; saleItemId: string; productId: string; name: string; qty: number; amount: number; restock: number }>((m) => `SELECT ri.return_id AS returnId, ri.sale_item_id AS saleItemId, ri.product_id AS productId, ri.name AS name, ri.qty AS qty, ri.amount AS amount, ri.restock AS restock FROM sale_return_items ri JOIN sale_returns r ON r.id = ri.return_id WHERE r.tenant_id = ? AND r.sale_id IN (${m})`) };
@@ -203,7 +239,7 @@ export async function listSalesForSnapshot(db: D1Database, tenantId: string, opt
 
   return sales.map((row) => ({
    ...row,
-   items: (itemsBySale.get(row.id) ?? []).map((i) => ({ productId: i.productId, name: i.name, sku: i.sku, qty: i.qty, price: i.price, discount: Number(i.discount), returnedQty: returnedQtyByItem.get(i.id) ?? 0 })),
+   items: (itemsBySale.get(row.id) ?? []).map((i) => ({ productId: i.productId, name: i.name, sku: i.sku, qty: i.qty, price: i.price, discount: Number(i.discount), returnedQty: returnedQtyByItem.get(i.id) ?? 0, ...(i.serial ? { serial: i.serial } : {}) })),
    payment: (paymentsBySale.get(row.id) ?? []).map((p) => p.method).join(' + '),
    fiscalStatus: 'pending' as const,
    returns: (returnsBySale.get(row.id) ?? []).map((r) => ({

@@ -14,8 +14,33 @@ import { createPostgresD1Adapter } from '../../lib/db/pgAdapter.ts';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(HERE, '..', '..', 'drizzle');
 
+// Schemas criados por este processo de teste: apagados ao final (senão o banco de teste cresce
+// a cada rodada até encher o disco).
+const created = new Set<string>();
+let cleanupUrl = '';
+let cleaning = false;
+process.on('beforeExit', () => {
+    if (cleaning || created.size === 0) return;
+    cleaning = true;
+    const schemas = [...created];
+    created.clear();
+    void (async () => {
+        const client = new pg.Client({ connectionString: cleanupUrl });
+        try {
+            await client.connect();
+            for (const s of schemas) await client.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+        } catch {
+            // Limpeza é só higiene do banco de teste: falhar aqui não muda o resultado dos testes.
+        } finally {
+            await client.end().catch(() => undefined);
+        }
+    })();
+});
+
 export function createPgTestDb(url: string, migrationFiles: string[]): D1Database {
     const schema = `t_${randomBytes(6).toString('hex')}`;
+    created.add(schema);
+    cleanupUrl = url;
     const pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 4, idleTimeoutMillis: 200, allowExitOnIdle: true });
     const inner = createPostgresD1Adapter(pool);
     const ready = (async () => {

@@ -33,7 +33,7 @@ const paymentLine = z.object({ method: paymentMethod, amount: cents.min(1) });
 // Aceita o formato antigo (`payment` único) OU o novo (`payments` — pagamento misto, §13).
 // Nunca os dois ao mesmo tempo; o servidor soma `payments` e confere contra o total.
 export const saleCreateSchema = z.object({
-    type: z.literal('sale.create'), storeId: identifier, items: z.array(z.object({ productId: identifier, qty })).min(1).max(100),
+    type: z.literal('sale.create'), storeId: identifier, items: z.array(z.object({ productId: identifier, qty, unitId: identifier.optional() })).min(1).max(100),
     customer: short, document: z.string().regex(/^(\d{11}|\d{14})?$/),
     payment: paymentMethod.optional(), payments: z.array(paymentLine).min(1).max(5).optional(),
     // §53: desconto em percentual (até 2 casas) OU em valor (centavos), sempre com motivo.
@@ -182,7 +182,7 @@ export const paymentCommandSchema = z.discriminatedUnion('type', [
     z.object({
         type: z.literal('payment.charge.start'),
         storeId: identifier,
-        items: z.array(z.object({ productId: identifier, qty })).min(1).max(100),
+        items: z.array(z.object({ productId: identifier, qty, unitId: identifier.optional() })).min(1).max(100),
         customer: short,
         document: z.string().regex(/^(\d{11}|\d{14})?$/),
         discount: z.object({ percent: z.number().gt(0).lt(100).optional(), amount: z.number().int().min(1).max(100000000).optional(), reason: short.min(3) }).strict().optional(),

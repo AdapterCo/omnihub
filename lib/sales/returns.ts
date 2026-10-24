@@ -57,6 +57,10 @@ export async function returnSale(
     // devolução por item; o caminho suportado é cancelar a venda (a unidade volta ao estoque).
     const fromOrder = await db.prepare('SELECT id FROM orders WHERE sale_id = ? AND tenant_id = ?').bind(params.saleId, tenantId).first<{ id: string }>();
     if (fromOrder) throw new RuleError('Venda de pedido (unidade com chassi/série): devolução por item não é suportada. Use "Cancelar venda" para desfazer (a unidade volta ao estoque).', 409);
+    // Aparelho vendido à vista no PDV (com IMEI): mesmo caminho da venda de pedido — cancelar a venda
+    // devolve a unidade ao estoque; a devolução por item não controla o IMEI.
+    const unitSale = await db.prepare('SELECT id FROM sale_items WHERE sale_id = ? AND unit_id IS NOT NULL LIMIT 1').bind(params.saleId).first<{ id: string }>();
+    if (unitSale) throw new RuleError('Venda de aparelho com IMEI: devolução por item não é suportada. Use "Cancelar venda" para desfazer (o aparelho volta ao estoque).', 409);
     const integrated = await db.prepare('SELECT status FROM payment_charges WHERE sale_id = ? AND tenant_id = ?').bind(params.saleId, tenantId).first<{ status: string }>();
     if (integrated) {
         throw new RuleError('Venda paga por pagamento integrado: o provedor só faz estorno total. Use "Cancelar venda" (o estorno no provedor é feito automaticamente); devolução parcial ainda não é suportada nesse caso.', 409);

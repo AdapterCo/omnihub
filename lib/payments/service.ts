@@ -4,7 +4,7 @@ import { requirePermission, requireStoreAccess } from '../authz/service.ts';
 import type { Actor } from '../domain.ts';
 import { encryptPayload, decryptPayload, type EncryptedPayload } from '../fiscal/certificate.ts';
 import { applySaleStockBatch } from '../inventory/service.ts';
-import { createSale, cancelSale } from '../sales/service.ts';
+import { createSale, cancelSale, releaseSaleUnits } from '../sales/service.ts';
 import type { DiscountRequest, SupervisorAuthorization } from '../sales/discount.ts';
 import { recordAudit } from '../audit/service.ts';
 import { logger } from '../log.ts';
@@ -239,7 +239,7 @@ export async function getChargeView(db: D1Database, tenantId: string, chargeId: 
 
 export type StartChargeInput = {
     storeId: string;
-    items: { productId: string; qty: number }[];
+    items: { productId: string; qty: number; unitId?: string }[];
     customer: string;
     document: string;
     discount?: DiscountRequest;
@@ -373,6 +373,7 @@ async function finalizeCharge(
         if (voided.meta.changes === 1) {
             const items = await db.prepare('SELECT product_id AS productId, qty FROM sale_items WHERE sale_id = ?').bind(charge.saleId).all<{ productId: string; qty: number }>();
             await applySaleStockBatch(db, charge.tenantId, (items.results ?? []).map((i) => ({ storeId: charge.storeId, productId: i.productId, qty: Number(i.qty) })), info.resolvedBy ?? SYSTEM_ACTOR.userId, charge.saleId, { reverse: true }, now);
+            await releaseSaleUnits(db, charge.tenantId, charge.saleId, now);
         }
     }
     await recordAudit(
