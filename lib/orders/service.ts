@@ -57,7 +57,9 @@ function normalizeSerial(kind: ProductKind, raw: string): string {
 }
 
 export async function registerUnit(db: D1Database, tenantId: string, input: UnitInput, actor: Actor, now = Date.now()): Promise<string> {
- requirePermission(actor.permissions, 'STOCK_ADJUST');
+ // Quem movimenta estoque cadastra unidade; o vendedor online também (UNIT_REGISTER), porque vende na
+ // hora e informa o chassi/IMEI e a cor. Remover unidade continua só com STOCK_ADJUST.
+ if (!actor.permissions.has('STOCK_ADJUST')) requirePermission(actor.permissions, 'UNIT_REGISTER');
  const store = await getStore(db, tenantId, input.storeId);
  if (!store) throw new RuleError('Loja não encontrada.', 404);
  requireStoreAccess(actor, store.id);

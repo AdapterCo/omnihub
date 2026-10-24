@@ -72,8 +72,10 @@ test('unidades: IMEI/chassi validados, únicos, campos do contrato obrigatórios
     // Loja de celulares não vende moto; produto comum não tem unidade.
     await assert.rejects(() => registerUnit(f.db, f.tenantId, { storeId: f.cellStore, productId: f.moto, serial: 'CHASSI-2', color: 'Preta' }, f.owner, NOW), /Venda com contrato/);
     await assert.rejects(() => registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.shirt, serial: 'X-1', color: 'Preta' }, f.owner, NOW), /comum/);
-    // Vendedor online não cadastra estoque.
-    await assert.rejects(() => registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.moto, serial: 'CHASSI-9', color: 'Preta' }, f.seller, NOW), /permissão/);
+    // Vendedor online cadastra a unidade na hora da venda (chassi e cor), mas não remove unidade.
+    const sellerUnit = await registerUnit(f.db, f.tenantId, { storeId: f.motoStore, productId: f.moto, serial: 'CHASSI-9', color: 'Preta' }, f.seller, NOW);
+    await assert.rejects(() => removeUnit(f.db, f.tenantId, sellerUnit, f.seller, NOW), /permissão/);
+    await removeUnit(f.db, f.tenantId, sellerUnit, f.owner, NOW);
     // Remover só unidade disponível; baixa o estoque e não apaga.
     await removeUnit(f.db, f.tenantId, u1, f.owner, NOW);
     assert.equal(await f.count(f.motoStore, f.moto), 0);

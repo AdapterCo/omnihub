@@ -348,7 +348,7 @@ export function UnitsPanel({ data, act, stores, storeFilter, busy, active }: { d
  };
  return <section className="panel mt-6">
   <div className="panel-heading"><div><h2>Unidades com chassi / IMEI</h2><p>Motos e aparelhos de locação são controlados por unidade física. O saldo do estoque acompanha estas unidades.</p></div>
-   {perms.has('STOCK_ADJUST') && <Button disabled={!active || busy} onClick={() => { setV({ storeId: storeFilter !== 'all' ? storeFilter : '' }); setAdding(true); }}><PackagePlus /> Cadastrar unidade</Button>}</div>
+   {(perms.has('STOCK_ADJUST') || perms.has('UNIT_REGISTER')) && <Button disabled={!active || busy} onClick={() => { setV({ storeId: storeFilter !== 'all' ? storeFilter : '' }); setAdding(true); }}><PackagePlus /> Cadastrar unidade</Button>}</div>
   {units.length ? <div className="table-pad"><Table><TableHeader><TableRow>{['Produto', 'Chassi / IMEI', 'Detalhes', 'Loja', 'Situação', ''].map((h) => <TableHead key={h}>{h}</TableHead>)}</TableRow></TableHeader>
    <TableBody>{units.map((u: UnitView) => <TableRow key={u.id}><TableCell>{u.productName}</TableCell><TableCell><strong>{u.serial}</strong></TableCell><TableCell>{[u.color, u.memory, u.condition].filter(Boolean).join(' · ')}</TableCell><TableCell>{storeName[u.storeId] ?? '—'}</TableCell>
     <TableCell><span className={'badge ' + (u.status === 'AVAILABLE' ? 'success' : u.status === 'RESERVED' ? 'warning' : 'neutral')}>{UNIT_STATUS[u.status] ?? u.status}</span></TableCell>
