@@ -16,7 +16,7 @@ import { saveNFCeStoreConfig, generateNFCeForSale } from './fiscal/nfce.ts';
 import { enqueueFiscalJob, runFiscalJobWorker } from './fiscal/queue.ts';
 import { requirePermission } from './authz/service.ts';
 import { registerUnit, removeUnit, createOrder, updateOrder, cancelOrder, completeOrder, addOrderNote } from './orders/service.ts';
-import { generateContract } from './contracts/service.ts';
+import { generateContract, deleteContract } from './contracts/service.ts';
 import { deleteDocument } from './documents/service.ts';
 import { storageFromEnv, type ObjectStorage } from './storage/index.ts';
 import { saveSignatureConfig } from './signature/service.ts';
@@ -195,6 +195,11 @@ export async function dispatchCommand(db: D1Database, tenantId: string, actor: A
         const result = await generateContract(db, context.storage ?? storageFromEnv(), tenantId, command.orderId, actor, now);
         await audit({ description: `Contrato gerado (${result.externalRef})`, entity: 'order', entityId: command.orderId, after: result });
         return result.contractId;
+    }
+    if (command.type === 'contract.delete') {
+        const removed = await deleteContract(db, tenantId, command.contractId, actor, now);
+        await audit({ description: `${removed.documentKind === 'CHECKLIST' ? 'Checklist' : 'Contrato'} não enviado descartado (${removed.externalRef})`, entity: 'order', entityId: removed.orderId, before: { contractId: command.contractId, externalRef: removed.externalRef } });
+        return command.contractId;
     }
     if (command.type === 'signature.config.save') {
         const { type: _t, storeId, ...input } = command;

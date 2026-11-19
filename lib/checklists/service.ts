@@ -5,7 +5,7 @@ import type { ObjectStorage } from '../storage/index.ts';
 import { storeDocument } from '../documents/service.ts';
 import type { Block, ContractTemplate } from '../contracts/templates.ts';
 import { renderContractPdf } from '../contracts/pdf.ts';
-import { missingFields, orderDocumentValues, CONTRACT_LOCKING_STATUSES } from '../contracts/service.ts';
+import { missingFields, orderDocumentValues, CONTRACT_LOCKING_STATUSES, nextRevision } from '../contracts/service.ts';
 import { publishedTemplateFor } from '../contracts/models.ts';
 import { FIELD_BY_KEY, placeholdersIn, type OrderType } from '../contracts/fields.ts';
 
@@ -182,8 +182,7 @@ export async function generateChecklist(db: D1Database, storage: ObjectStorage, 
  const missing = missingFields(template, values);
  if (missing.length) throw new RuleError(`Não foi possível gerar o checklist. Preencha: ${missing.join(', ')}.`, 400);
 
- const count = await db.prepare("SELECT COUNT(*) AS n FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CHECKLIST'").bind(tenantId, orderId).first<{ n: number }>();
- const revision = Number(count?.n ?? 0) + 1;
+ const revision = await nextRevision(db, tenantId, orderId, 'CHECKLIST');
  const externalRef = `pedido-${src.order.number}-checklist-r${revision}`;
  const pdf = await renderContractPdf(template, values, { title: `${row.title} #${src.order.number} - ${values['cliente.nome']}`, now });
  const contractId = crypto.randomUUID();

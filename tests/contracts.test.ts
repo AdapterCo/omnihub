@@ -9,7 +9,7 @@ import { loadPermissions } from '../lib/authz/service.ts';
 import { createStore, createProduct } from '../lib/catalog/service.ts';
 import { createCustomer, updateCustomer } from '../lib/customers/service.ts';
 import { registerUnit, createOrder, updateOrder, cancelOrder } from '../lib/orders/service.ts';
-import { generateContract, listContracts, buildContractValues } from '../lib/contracts/service.ts';
+import { generateContract, listContracts, buildContractValues, deleteContract } from '../lib/contracts/service.ts';
 import { TEMPLATES, placeholdersOf } from '../lib/contracts/templates.ts';
 import { uploadOrderDocument, readDocument, deleteDocument, listOrderDocuments, detectFileType } from '../lib/documents/service.ts';
 import { createLocalStorage, storageFromEnv, assertSafeKey } from '../lib/storage/index.ts';
@@ -248,4 +248,25 @@ test('comandos contract.generate e document.delete pela API, com auditoria', asy
     assert.ok(contractId);
     const log = await f.db.prepare("SELECT description FROM audit_logs WHERE entity = 'order' AND entity_id = ? AND description LIKE 'Contrato gerado%'").bind(orderId).first<{ description: string }>();
     assert.equal(log?.description, 'Contrato gerado (pedido-1-contrato-moto-v1-r1)');
+});
+
+test('descartar contrato: só o gerado e nunca enviado; o PDF sai do pedido e a próxima revisão não repete referência', async () => {
+    const f = await fixture();
+    const orderId = await motoOrder(f);
+    const c1 = await generateContract(f.db, f.storage, f.tenantId, orderId, f.seller, NOW);
+    const c2 = await generateContract(f.db, f.storage, f.tenantId, orderId, f.seller, NOW + 1000);
+    assert.equal(c2.externalRef, 'pedido-1-contrato-moto-v1-r2');
+    await deleteContract(f.db, f.tenantId, c2.contractId, f.seller, NOW);
+    const left = await listContracts(f.db, f.tenantId, f.owner);
+    assert.deepEqual(left.map((c) => c.id), [c1.contractId]);
+    assert.ok(!(await listOrderDocuments(f.db, f.tenantId, f.owner)).some((d) => d.contractId === c2.contractId));
+    // A revisão seguinte segue a maior existente (r1 ficou), sem colidir com nenhuma referência guardada.
+    const c3 = await generateContract(f.db, f.storage, f.tenantId, orderId, f.seller, NOW + 2000);
+    assert.equal(c3.externalRef, 'pedido-1-contrato-moto-v1-r2');
+    // Enviado (tem envelope): não pode ser descartado, nem depois de cancelado — vale "Cancelar assinatura".
+    await f.db.prepare("UPDATE contracts SET internal_status = 'SENT', envelope_id = 'MOCK-env', sent_at = ? WHERE id = ?").bind(NOW, c3.contractId).run();
+    await assert.rejects(() => deleteContract(f.db, f.tenantId, c3.contractId, f.seller, NOW), /Cancelar assinatura/);
+    await f.db.prepare("UPDATE contracts SET internal_status = 'CANCELLED' WHERE id = ?").bind(c3.contractId).run();
+    await assert.rejects(() => deleteContract(f.db, f.tenantId, c3.contractId, f.seller, NOW), /já foi enviado/);
+    await assert.rejects(() => deleteContract(f.db, f.tenantId, 'inexistente', f.seller, NOW), /não encontrado/);
 });

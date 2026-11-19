@@ -152,8 +152,7 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
  const missing = missingFields(template, values);
  if (missing.length) throw new RuleError(`Não foi possível gerar o contrato. Preencha: ${missing.join(', ')}.`, 400);
 
- const count = await db.prepare("SELECT COUNT(*) AS n FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = 'CONTRATO'").bind(tenantId, orderId).first<{ n: number }>();
- const revision = Number(count?.n ?? 0) + 1;
+ const revision = await nextRevision(db, tenantId, orderId, 'CONTRATO');
  const externalRef = `pedido-${src.order.number}-${template.key}-v${template.version}-r${revision}`;
  const title = `${template.orderType === 'VENDA' ? 'Contrato de venda' : 'Contrato de locação'} #${src.order.number} - ${values['cliente.nome']}`;
  const rendering=await db.prepare('SELECT moto_initials AS moto,locacao_initials AS locacao FROM signature_configs WHERE tenant_id=? AND store_id=?').bind(tenantId,src.store.id).first<{moto:number;locacao:number}>();
@@ -181,6 +180,32 @@ export async function generateContract(db: D1Database, storage: ObjectStorage, t
   ).bind(contractId, tenantId, src.order.storeId, orderId, src.order.customerId, src.order.type, template.key, template.version, revision, externalRef, doc.id, doc.sha256, snapshot, actor.userId, actor.displayName, now, now, now),
  ]);
  return { contractId, documentId: doc.id, externalRef };
+}
+
+// Contrato/checklist que nunca chegou ao Adapter Sign (sem envelope nem envio): pode ser descartado.
+// O que foi enviado fica guardado (prova da assinatura ou do cancelamento); para ele vale "Cancelar assinatura".
+const NEVER_SENT = "envelope_id IS NULL AND sent_at IS NULL AND internal_status IN ('GENERATED','SUPERSEDED','CANCELLED')";
+
+/** Próxima revisão do pedido: a maior existente + 1 (descartar não repete referência de outra revisão). */
+export async function nextRevision(db: D1Database, tenantId: string, orderId: string, kind: 'CONTRATO' | 'CHECKLIST'): Promise<number> {
+ const row = await db.prepare('SELECT MAX(revision) AS n FROM contracts WHERE tenant_id = ? AND order_id = ? AND document_kind = ?').bind(tenantId, orderId, kind).first<{ n: number | null }>();
+ return Number(row?.n ?? 0) + 1;
+}
+
+/** Descartar contrato ou checklist gerado e nunca enviado para assinatura (o PDF vai para a exclusão lógica). */
+export async function deleteContract(db: D1Database, tenantId: string, contractId: string, actor: Actor, now = Date.now()): Promise<{ orderId: string; externalRef: string; documentKind: string }> {
+ requirePermission(actor.permissions, 'ORDER_CREATE');
+ const c = await db.prepare(`SELECT store_id AS storeId, order_id AS orderId, external_ref AS externalRef, document_kind AS documentKind, (CASE WHEN ${NEVER_SENT} THEN 1 ELSE 0 END) AS deletable FROM contracts WHERE id = ? AND tenant_id = ?`).bind(contractId, tenantId).first<{ storeId: string; orderId: string; externalRef: string; documentKind: string; deletable: number }>();
+ if (!c) throw new RuleError('Contrato não encontrado.', 404);
+ requireStoreAccess(actor, c.storeId);
+ const what = c.documentKind === 'CHECKLIST' ? 'checklist' : 'contrato';
+ if (!Number(c.deletable)) throw new RuleError(`Este ${what} já foi enviado para assinatura e fica guardado como registro. Para desfazer, use "Cancelar assinatura".`, 409);
+ const results = await db.batch([
+  db.prepare('UPDATE documents SET deleted_at = ?, deleted_by = ? WHERE tenant_id = ? AND contract_id = ? AND deleted_at IS NULL').bind(now, actor.userId, tenantId, contractId),
+  db.prepare(`DELETE FROM contracts WHERE id = ? AND tenant_id = ? AND ${NEVER_SENT}`).bind(contractId, tenantId),
+ ]);
+ if (Number(results[1]?.meta?.changes ?? 0) !== 1) throw new RuleError(`O ${what} mudou de situação. Atualize a tela.`, 409);
+ return { orderId: c.orderId, externalRef: c.externalRef, documentKind: c.documentKind };
 }
 
 /**

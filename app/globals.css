@@ -211,6 +211,13 @@ p{line-height:1.6}
 .form-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
 .native-select{width:100%;border:1px solid var(--line);background:#fff;border-radius:8px;min-height:40px;padding:8px 10px;font-size:.875rem}
 .native-select:focus{outline:none;border-color:var(--balcao);box-shadow:0 0 0 3px rgb(14 102 80 / .14)}
+.search-pick{position:relative;width:100%}
+.search-pick input{width:100%;border:1px solid var(--line);background:#fff;border-radius:8px;min-height:40px;padding:8px 10px;font-size:.875rem}
+.search-pick input:focus{outline:none;border-color:var(--balcao);box-shadow:0 0 0 3px rgb(14 102 80 / .14)}
+.search-pick-list{position:absolute;z-index:60;left:0;right:0;top:calc(100% + 4px);max-height:260px;overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgb(23 33 29 / .12);padding:4px;margin:0;list-style:none}
+.search-pick-list li{padding:8px 10px;border-radius:6px;font-size:.875rem;cursor:pointer}
+.search-pick-list li.active{background:var(--balcao-wash)}
+.search-pick-list li.empty{color:var(--muted-foreground);cursor:default}
 .search-input{flex:1;min-width:0;border:1px solid var(--line);background:#fff;border-radius:8px;min-height:40px;padding:9px 12px;font-size:.875rem}
 
 /* ---------------------------------------------------------------- lojas */

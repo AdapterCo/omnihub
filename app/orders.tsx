@@ -55,6 +55,35 @@ const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Pa
 function Field({ label, children, full, hint }: { label: string; children: ReactNode; full?: boolean; hint?: string }) {
  return <label className={'field ' + (full ? 'full' : '')}>{label}{children}{hint && <small className="muted">{hint}</small>}</label>;
 }
+// Campo com autocompletar (lista filtrada enquanto digita; ignora acentos e maiúsculas; setas, Enter e Esc).
+const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function SearchPick({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string; search?: string }[]; placeholder?: string }) {
+ const selected = options.find((o) => o.value === value);
+ const [text, setText] = useState(selected?.label ?? '');
+ const [open, setOpen] = useState(false);
+ const [hi, setHi] = useState(0);
+ useEffect(() => { setText(selected?.label ?? ''); }, [selected?.label]);
+ const terms = fold(text).split(/\s+/).filter(Boolean);
+ const matches = (selected && text === selected.label ? options : options.filter((o) => { const hay = fold(o.search ?? o.label); return terms.every((t) => hay.includes(t)); })).slice(0, 8);
+ const pick = (o: { value: string; label: string }) => { onChange(o.value); setText(o.label); setOpen(false); };
+ return <div className="search-pick">
+  <input value={text} placeholder={placeholder} autoComplete="off" role="combobox" aria-expanded={open} aria-autocomplete="list"
+   onFocus={(e) => { setOpen(true); setHi(0); e.currentTarget.select(); }}
+   onBlur={() => setTimeout(() => { setOpen(false); setText(selected?.label ?? ''); }, 150)}
+   onChange={(e) => { setText(e.target.value); setOpen(true); setHi(0); if (value) onChange(''); }}
+   onKeyDown={(e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, matches.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === 'Enter' && open && matches[hi]) { e.preventDefault(); pick(matches[hi]); }
+    else if (e.key === 'Escape') setOpen(false);
+   }} />
+  {open && <ul className="search-pick-list" role="listbox">
+   {matches.length ? matches.map((o, i) => <li key={o.value} role="option" aria-selected={o.value === value} className={i === hi ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setHi(i)}>{o.label}</li>)
+    : <li className="empty">Nenhum cliente encontrado. Cadastre na aba Clientes.</li>}
+  </ul>}
+ </div>;
+}
+
 function NativePick({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder?: string }) {
  return <select className="native-select" value={value} onChange={(e) => onChange(e.target.value)}>
   <option value="">{placeholder ?? 'Selecione'}</option>
@@ -134,7 +163,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
   <form onSubmit={submit}><fieldset disabled={busy} className="form-grid">
    {!order && <Field label="Loja"><NativePick value={v.storeId} onChange={(x) => { set('storeId', x); set('unitId', ''); set('type', ''); }} options={stores.map((s) => ({ value: s.id, label: s.name }))} /></Field>}
    {!order && <Field label="Tipo do pedido"><NativePick value={type} onChange={(x) => { set('type', x); set('unitId', ''); }} options={types} /></Field>}
-   <Field label="Cliente" full hint={customers.length ? undefined : 'Cadastre o cliente na aba Clientes antes (nome, CPF, endereço, e-mail e telefone vão para o contrato).'}><NativePick value={v.customerId} onChange={(x) => set('customerId', x)} options={customers.map((c) => ({ value: c.id, label: `${c.name}${c.document ? ' · ' + c.document : ''}` }))} /></Field>
+   <Field label="Cliente" full hint={customers.length ? undefined : 'Cadastre o cliente na aba Clientes antes (nome, CPF, endereço, e-mail e telefone vão para o contrato).'}><SearchPick value={v.customerId} onChange={(x) => set('customerId', x)} placeholder="Digite o nome, CPF ou CNPJ do cliente" options={customers.map((c) => ({ value: c.id, label: `${c.name}${c.document ? ' · ' + c.document : ''}`, search: `${c.name} ${c.document ?? ''} ${(c.document ?? '').replace(/\D/g, '')}` }))} /></Field>
    <Field label={kind === 'LOCACAO' ? 'Aparelho (IMEI)' : 'Unidade (chassi/série)'} full hint={kind && !units.length ? 'Nenhuma unidade disponível desta loja. Cadastre em Produtos e estoque > Unidades.' : undefined}><NativePick value={v.unitId} onChange={(x) => set('unitId', x)} options={units.map((u) => ({ value: u.id, label: `${u.productName} · ${u.serial} · ${u.color}${u.memory ? ' · ' + u.memory : ''}${u.condition ? ' · ' + u.condition : ''}` }))} /></Field>
    {type === 'VENDA' && <>
     <Field label="Valor da venda (R$)"><input inputMode="decimal" value={v.total ?? ''} onChange={(e) => set('total', e.target.value)} /></Field>
@@ -258,6 +287,7 @@ function ContractSection({ order, contracts, act, refresh, perms, busy, active, 
    <div className="inline flex-wrap" style={{ gap: 6, marginTop: 10 }}>
     {current && <Button variant="outline" size="sm" onClick={() => window.open(docUrl(current.originalDocumentId), '_blank', 'noopener')}><Eye size={15} /> Visualizar PDF</Button>}
     {canGenerate && !checklist && <Button size="sm" variant={current ? 'outline' : 'default'} disabled={busy || working || !active} onClick={() => void act({ type: 'contract.generate', orderId: order.id })}><FileSignature size={15} /> {current ? 'Gerar nova revisão' : 'Gerar contrato'}</Button>}
+    {current && perms.has('ORDER_CREATE') && current.status === 'GENERATED' && !current.sentAt && <Button variant="outline" size="sm" disabled={busy || working} onClick={() => { if (window.confirm(`Descartar ${checklist ? 'o checklist' : 'o contrato'} (revisão ${current.revision})? O PDF sai do pedido e você pode corrigir o pedido e gerar outro. Esta ação não pode ser desfeita.`)) void act({ type: 'contract.delete', contractId: current.id }); }}><Trash2 size={15} /> Descartar {checklist ? 'checklist' : 'contrato'}</Button>}
     {current && perms.has('ORDER_CREATE') && (current.status === 'GENERATED' || current.status === 'SENDING') && <Button size="sm" disabled={working || !active} onClick={() => void run('send')}><FileSignature size={15} /> {current.status === 'SENDING' ? 'Tentar enviar de novo' : 'Enviar para assinatura'}</Button>}
     {current?.status === 'SENT' && perms.has('ORDER_CREATE') && <Button variant="outline" size="sm" disabled={working || !active} onClick={() => void run('link')}>Gerar novo link para o cliente</Button>}
     {current && ['SENT', 'CLIENT_SIGNED', 'FINALIZING'].includes(current.status) && <Button variant="outline" size="sm" disabled={working} onClick={() => void run('refresh')}>Atualizar situação</Button>}
