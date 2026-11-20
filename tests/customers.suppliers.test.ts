@@ -67,7 +67,7 @@ test('createCustomer e listCustomers com isolamento por tenant', async () => {
             name: 'Outra Maria',
             document: '12345678900',
         }, owner),
-        /Já existe um cliente cadastrado com este documento/,
+        /já está cadastrado para o cliente "Maria Oliveira"/,
     );
 });
 
@@ -94,7 +94,7 @@ test('updateCustomer atualiza dados e valida unicidade', async () => {
     // Tentativa de atualizar documento de c2 para o mesmo de c1 deve falhar
     await assert.rejects(
         () => updateCustomer(db, 't1', c2, { document: '11111111111' }, owner),
-        /Já existe outro cliente cadastrado com este documento/,
+        /já está cadastrado para outro cliente/,
     );
 });
 
@@ -193,4 +193,18 @@ test('dispatchCommand despacha customer.* e supplier.* e gera auditoria', async 
     assert.equal(audits.results.length, 2);
     assert.match(audits.results[0]?.description ?? '', /Cliente: Cliente Comando/);
     assert.match(audits.results[1]?.description ?? '', /Fornecedor: Fornecedor Comando/);
+});
+
+test('lista de clientes traz todos (antes parava no 100º nome e o cliente "sumia" do pedido)', async () => {
+    const db = createFakeD1();
+    await db.prepare("INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES ('t1','Tenant 1','{}',0,'trial',9999999999999,3,0)").bind().run();
+    // 150 clientes fictícios; os que começam com "Z" ficariam depois do 100º em ordem alfabética.
+    for (let i = 0; i < 150; i++) {
+        await createCustomer(db, 't1', { name: `${i < 140 ? 'Cliente' : 'Zé Fictício'} ${String(i).padStart(3, '0')}`, document: String(10000000000 + i) }, owner);
+    }
+    const all = await listCustomers(db, 't1', owner);
+    assert.equal(all.length, 150);
+    assert.ok(all.some((c) => c.name === 'Zé Fictício 149'), 'o último em ordem alfabética aparece');
+    // A busca por termo continua limitada (não é usada pela tela).
+    assert.ok((await listCustomers(db, 't1', owner, 'Cliente')).length <= 100);
 });

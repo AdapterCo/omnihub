@@ -115,7 +115,10 @@ export async function listCustomers(
         const q = `%${query.trim()}%`;
         params.push(q, q, q, q);
     }
-    sql += ` ORDER BY name ASC LIMIT 100`;
+    // Sem busca, vêm todos: a lista da tela (aba Clientes e pedido) usa este resultado. O antigo LIMIT 100
+    // escondia quem ficava depois do 100º nome — o vendedor não achava o cliente e, ao cadastrar de novo,
+    // recebia "já existe". O limite vale só para busca por termo.
+    sql += ` ORDER BY name ASC${query && query.trim() ? ' LIMIT 100' : ''}`;
 
     const rows = await db.prepare(sql).bind(...params).all<CustomerRecord>();
     return rows.results ?? [];
@@ -155,11 +158,11 @@ export async function createCustomer(
 
     if (cleanDoc) {
         const existing = await db
-            .prepare(`SELECT id FROM customers WHERE tenant_id = ? AND document = ?`)
+            .prepare(`SELECT id, name FROM customers WHERE tenant_id = ? AND document = ?`)
             .bind(tenantId, cleanDoc)
-            .first<{ id: string }>();
+            .first<{ id: string; name: string }>();
         if (existing) {
-            throw new RuleError(`Já existe um cliente cadastrado com este documento (${cleanDoc}).`, 409);
+            throw new RuleError(`Este documento (${cleanDoc}) já está cadastrado para o cliente "${existing.name}". Procure por esse nome na lista de clientes.`, 409);
         }
     }
 
@@ -233,11 +236,11 @@ export async function updateCustomer(
 
     if (cleanDoc) {
         const dup = await db
-            .prepare(`SELECT id FROM customers WHERE tenant_id = ? AND document = ? AND id != ?`)
+            .prepare(`SELECT id, name FROM customers WHERE tenant_id = ? AND document = ? AND id != ?`)
             .bind(tenantId, cleanDoc, id)
-            .first<{ id: string }>();
+            .first<{ id: string; name: string }>();
         if (dup) {
-            throw new RuleError(`Já existe outro cliente cadastrado com este documento (${cleanDoc}).`, 409);
+            throw new RuleError(`Este documento (${cleanDoc}) já está cadastrado para outro cliente: "${dup.name}".`, 409);
         }
     }
 
@@ -292,7 +295,8 @@ export async function listSuppliers(
         const q = `%${query.trim()}%`;
         params.push(q, q, q, q);
     }
-    sql += ` ORDER BY name ASC LIMIT 100`;
+    // Mesmo motivo da lista de clientes: sem busca, vêm todos.
+    sql += ` ORDER BY name ASC${query && query.trim() ? ' LIMIT 100' : ''}`;
 
     const rows = await db.prepare(sql).bind(...params).all<SupplierRecord>();
     return rows.results ?? [];
