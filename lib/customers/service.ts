@@ -52,6 +52,13 @@ const shortText = z.string().trim().max(160);
 const cleanDigits = (val: unknown) => typeof val === 'string' ? val.replace(/\D/g, '') : val;
 const cleanUpper = (val: unknown) => typeof val === 'string' ? val.trim().toUpperCase() : val;
 
+// Texto de busca do cliente: minúsculas e sem acento ("joao" acha "João"); documento e telefone só com
+// dígitos (o CPF digitado com ou sem pontos acha o mesmo cliente).
+export const foldText = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+export function customerSearchText(c: { name: string; document?: string; phone?: string; email?: string; city?: string }): string {
+    return [foldText(c.name), (c.document ?? '').replace(/\D/g, ''), (c.phone ?? '').replace(/\D/g, ''), foldText(c.email ?? ''), foldText(c.city ?? '')].filter(Boolean).join(' ');
+}
+
 export const customerInputSchema = z.object({
     name: shortText.min(2, 'Nome deve ter pelo menos 2 caracteres.'),
     document: z.preprocess(cleanDigits, z.string().regex(/^(\d{11}|\d{14})?$/, 'Documento deve ser CPF (11 dígitos) ou CNPJ (14 dígitos).').default('')),
@@ -169,8 +176,8 @@ export async function createCustomer(
     await db
         .prepare(
             `INSERT INTO customers
-             (id, tenant_id, name, document, doc_type, ie, ind_ie_dest, email, phone, zip, address, number, complement, district, city, state, municipality_code, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, tenant_id, name, document, doc_type, ie, ind_ie_dest, email, phone, zip, address, number, complement, district, city, state, municipality_code, created_at, updated_at, search_text)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
             id,
@@ -192,6 +199,7 @@ export async function createCustomer(
             input.municipalityCode.replace(/\D/g, ''),
             now,
             now,
+            customerSearchText({ name: input.name, document: cleanDoc, phone: input.phone, email: input.email, city: input.city }),
         )
         .run();
 
@@ -249,7 +257,7 @@ export async function updateCustomer(
             `UPDATE customers SET
              name = ?, document = ?, doc_type = ?, ie = ?, ind_ie_dest = ?, email = ?, phone = ?,
              zip = ?, address = ?, number = ?, complement = ?, district = ?, city = ?, state = ?,
-             municipality_code = ?, updated_at = ?
+             municipality_code = ?, updated_at = ?, search_text = ?
              WHERE id = ? AND tenant_id = ?`,
         )
         .bind(
@@ -269,12 +277,57 @@ export async function updateCustomer(
             merged.state,
             merged.municipalityCode,
             now,
+            customerSearchText({ name: merged.name, document: cleanDoc, phone: merged.phone, email: merged.email, city: merged.city }),
             id,
             tenantId,
         )
         .run();
 
     return id;
+}
+
+const CUSTOMER_COLUMNS = `id, tenant_id AS tenantId, name, document, doc_type AS docType, ie, ind_ie_dest AS indIeDest,
+                      email, phone, zip, address, number, complement, district, city, state,
+                      municipality_code AS municipalityCode, created_at AS createdAt, updated_at AS updatedAt`;
+
+/** Preenche o texto de busca dos clientes antigos da conta (gravados antes da coluna existir). */
+async function backfillCustomerSearch(db: D1Database, tenantId: string): Promise<void> {
+    for (let round = 0; round < 200; round++) {
+        const rows = await db.prepare(`SELECT id, name, document, phone, email, city FROM customers WHERE tenant_id = ? AND search_text = '' LIMIT 500`).bind(tenantId).all<{ id: string; name: string; document: string; phone: string; email: string; city: string }>();
+        const list = rows.results ?? [];
+        if (!list.length) return;
+        await db.batch(list.map((c) => db.prepare('UPDATE customers SET search_text = ? WHERE id = ? AND tenant_id = ?').bind(customerSearchText(c) || foldText(c.name) || '-', c.id, tenantId)));
+        if (list.length < 500) return;
+    }
+}
+
+/**
+ * Busca de clientes NO SERVIDOR, sempre só na conta (tenantId vem da sessão, nunca da tela): nome, CPF/CNPJ
+ * (com ou sem pontuação), telefone, e-mail ou cidade, sem diferenciar acento/maiúscula; cada palavra digitada
+ * precisa aparecer. Paginada ("Carregar mais"), para contas com milhares de clientes.
+ */
+export async function searchCustomers(
+    db: D1Database,
+    tenantId: string,
+    actor: Actor,
+    options: { q?: string; limit?: number; offset?: number } = {},
+): Promise<{ items: CustomerRecord[]; hasMore: boolean }> {
+    requirePermission(actor.permissions, 'CUSTOMER_VIEW');
+    await backfillCustomerSearch(db, tenantId);
+    const limit = Math.max(1, Math.min(50, Math.floor(options.limit ?? 20)));
+    const offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const terms = foldText(String(options.q ?? '')).split(/\s+/).filter(Boolean).slice(0, 6).map((t) => {
+        const digits = t.replace(/[.\-\/()]/g, '');
+        const term = /^\d+$/.test(digits) ? digits : t;
+        return `%${term.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
+    });
+    const where = ['tenant_id = ?', ...terms.map(() => "search_text LIKE ? ESCAPE '\\'")];
+    const rows = await db
+        .prepare(`SELECT ${CUSTOMER_COLUMNS} FROM customers WHERE ${where.join(' AND ')} ORDER BY name ASC, id ASC LIMIT ? OFFSET ?`)
+        .bind(tenantId, ...terms, limit + 1, offset)
+        .all<CustomerRecord>();
+    const list = rows.results ?? [];
+    return { items: list.slice(0, limit), hasMore: list.length > limit };
 }
 
 export async function listSuppliers(

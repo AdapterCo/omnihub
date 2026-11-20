@@ -1,4 +1,5 @@
 'use client';
+import { CustomerPicker } from './customers';
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Plus, X, Check, Pencil, MessageSquare, Trash2, PackagePlus, FileSignature, Paperclip, Eye, Download, ClipboardCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -55,35 +56,6 @@ const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Pa
 function Field({ label, children, full, hint }: { label: string; children: ReactNode; full?: boolean; hint?: string }) {
  return <label className={'field ' + (full ? 'full' : '')}>{label}{children}{hint && <small className="muted">{hint}</small>}</label>;
 }
-// Campo com autocompletar (lista filtrada enquanto digita; ignora acentos e maiúsculas; setas, Enter e Esc).
-const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-function SearchPick({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string; search?: string }[]; placeholder?: string }) {
- const selected = options.find((o) => o.value === value);
- const [text, setText] = useState(selected?.label ?? '');
- const [open, setOpen] = useState(false);
- const [hi, setHi] = useState(0);
- useEffect(() => { setText(selected?.label ?? ''); }, [selected?.label]);
- const terms = fold(text).split(/\s+/).filter(Boolean);
- const matches = (selected && text === selected.label ? options : options.filter((o) => { const hay = fold(o.search ?? o.label); return terms.every((t) => hay.includes(t)); })).slice(0, 8);
- const pick = (o: { value: string; label: string }) => { onChange(o.value); setText(o.label); setOpen(false); };
- return <div className="search-pick">
-  <input value={text} placeholder={placeholder} autoComplete="off" role="combobox" aria-expanded={open} aria-autocomplete="list"
-   onFocus={(e) => { setOpen(true); setHi(0); e.currentTarget.select(); }}
-   onBlur={() => setTimeout(() => { setOpen(false); setText(selected?.label ?? ''); }, 150)}
-   onChange={(e) => { setText(e.target.value); setOpen(true); setHi(0); if (value) onChange(''); }}
-   onKeyDown={(e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, matches.length - 1)); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-    else if (e.key === 'Enter' && open && matches[hi]) { e.preventDefault(); pick(matches[hi]); }
-    else if (e.key === 'Escape') setOpen(false);
-   }} />
-  {open && <ul className="search-pick-list" role="listbox">
-   {matches.length ? matches.map((o, i) => <li key={o.value} role="option" aria-selected={o.value === value} className={i === hi ? 'active' : ''} onMouseDown={(e) => { e.preventDefault(); pick(o); }} onMouseEnter={() => setHi(i)}>{o.label}</li>)
-    : <li className="empty">Nenhum cliente encontrado. Cadastre na aba Clientes.</li>}
-  </ul>}
- </div>;
-}
-
 function NativePick({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: { value: string; label: string }[]; placeholder?: string }) {
  return <select className="native-select" value={value} onChange={(e) => onChange(e.target.value)}>
   <option value="">{placeholder ?? 'Selecione'}</option>
@@ -141,7 +113,6 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
  const type = v.type || (types.length === 1 ? types[0].value : '');
  const kind = type === 'VENDA' ? 'MOTO' : type === 'LOCACAO' ? 'LOCACAO' : '';
  const units = (data.state.units ?? []).filter((u) => u.storeId === v.storeId && u.kind === kind && (u.status === 'AVAILABLE' || u.id === order?.unitId));
- const customers = data.state.customers ?? [];
  const installments = Number(v.installments || 0);
  const financed = toCents(v.total) - toCents(v.downPayment || '0');
  const submit = async (e: FormEvent) => {
@@ -163,7 +134,7 @@ function OrderForm({ data, act, stores, order, busy, onClose, onSaved }: { data:
   <form onSubmit={submit}><fieldset disabled={busy} className="form-grid">
    {!order && <Field label="Loja"><NativePick value={v.storeId} onChange={(x) => { set('storeId', x); set('unitId', ''); set('type', ''); }} options={stores.map((s) => ({ value: s.id, label: s.name }))} /></Field>}
    {!order && <Field label="Tipo do pedido"><NativePick value={type} onChange={(x) => { set('type', x); set('unitId', ''); }} options={types} /></Field>}
-   <Field label="Cliente" full hint={customers.length ? undefined : 'Cadastre o cliente na aba Clientes antes (nome, CPF, endereço, e-mail e telefone vão para o contrato).'}><SearchPick value={v.customerId} onChange={(x) => set('customerId', x)} placeholder="Digite o nome, CPF ou CNPJ do cliente" options={customers.map((c) => ({ value: c.id, label: `${c.name}${c.document ? ' · ' + c.document : ''}`, search: `${c.name} ${c.document ?? ''} ${(c.document ?? '').replace(/\D/g, '')}` }))} /></Field>
+   <Field label="Cliente" full hint="Busca em todos os clientes da conta (nome, CPF/CNPJ ou telefone). Não achou? Cadastre na aba Clientes: nome, CPF, endereço, e-mail e telefone vão para o contrato."><CustomerPicker value={v.customerId} initialLabel={order ? `${order.customerName}${order.customerDocument ? ' · ' + order.customerDocument : ''}` : undefined} onChange={(x) => set('customerId', x)} /></Field>
    <Field label={kind === 'LOCACAO' ? 'Aparelho (IMEI)' : 'Unidade (chassi/série)'} full hint={kind && !units.length ? 'Nenhuma unidade disponível desta loja. Cadastre em Produtos e estoque > Unidades.' : undefined}><NativePick value={v.unitId} onChange={(x) => set('unitId', x)} options={units.map((u) => ({ value: u.id, label: `${u.productName} · ${u.serial} · ${u.color}${u.memory ? ' · ' + u.memory : ''}${u.condition ? ' · ' + u.condition : ''}` }))} /></Field>
    {type === 'VENDA' && <>
     <Field label="Valor da venda (R$)"><input inputMode="decimal" value={v.total ?? ''} onChange={(e) => set('total', e.target.value)} /></Field>

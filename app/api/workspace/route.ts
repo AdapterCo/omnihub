@@ -57,7 +57,7 @@ async function fullState(db:D1Database,tenantId:string,actor:Actor){
   listStores(db,tenantId),listProductsForSnapshot(db,tenantId),listStockMapForTenant(db,tenantId),listTransfersForSnapshot(db,tenantId),
   listSessionsForSnapshot(db,tenantId,{since,limit:SNAPSHOT_CASH_LIMIT,storeId:scope}),listSalesForSnapshot(db,tenantId,{since,limit:SNAPSHOT_SALES_LIMIT,storeId:scope}),canViewAudit?listAudit(db,tenantId,{limit:SNAPSHOT_AUDIT_LIMIT,storeId:scope}):Promise.resolve([]),
   canViewUsers?listTenantUsers(db,tenantId,actor):Promise.resolve([]),
-  canViewCustomers?listCustomers(db,tenantId,actor):Promise.resolve([]),
+  Promise.resolve([]),
   canViewSuppliers?listSuppliers(db,tenantId,actor):Promise.resolve([]),
  ]);
  const storeRecords=stores.map(s=>({id:s.id,name:s.name,legalName:s.legalName,cnpj:s.cnpj,ie:s.ie,regime:s.regime,uf:s.uf,city:s.city,municipalityCode:s.municipalityCode,address:s.address,number:s.number,district:s.district,zip:s.zip,modalities:s.modalities}));

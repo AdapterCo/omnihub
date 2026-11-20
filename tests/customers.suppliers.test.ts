@@ -11,6 +11,7 @@ import {
     updateSupplier,
     getSupplier,
     listSuppliers,
+    searchCustomers,
 } from '../lib/customers/service.ts';
 import { dispatchCommand } from '../lib/relationalCommands.ts';
 import type { Entitlement } from '../lib/domain.ts';
@@ -207,4 +208,51 @@ test('lista de clientes traz todos (antes parava no 100º nome e o cliente "sumi
     assert.ok(all.some((c) => c.name === 'Zé Fictício 149'), 'o último em ordem alfabética aparece');
     // A busca por termo continua limitada (não é usada pela tela).
     assert.ok((await listCustomers(db, 't1', owner, 'Cliente')).length <= 100);
+});
+
+test('busca de clientes no servidor: só a conta, sem acento, CPF/telefone com ou sem pontuação, várias palavras e páginas', async () => {
+    const db = createFakeD1();
+    for (const t of ['t1', 't2']) await db.prepare(`INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES ('${t}','${t}','{}',0,'trial',9999999999999,3,0)`).bind().run();
+    // Dados fictícios.
+    await createCustomer(db, 't1', { name: 'João da Silva', document: '529.982.247-25', phone: '(24) 99999-1234', city: 'Volta Redonda' }, owner);
+    await createCustomer(db, 't1', { name: 'Maria Souza', document: '11144477735', email: 'maria@exemplo.com' }, owner);
+    await createCustomer(db, 't2', { name: 'João de Outra Conta', document: '52998224725' }, owner);
+    const names = async (tenant: string, q: string) => (await searchCustomers(db, tenant, owner, { q })).items.map((c) => c.name);
+    // Só a conta: a outra conta tem um "João" com o mesmo CPF e nunca aparece.
+    assert.deepEqual(await names('t1', 'joao'), ['João da Silva']);
+    assert.deepEqual(await names('t2', 'joao'), ['João de Outra Conta']);
+    assert.deepEqual(await names('t1', '529.982.247-25'), ['João da Silva']);
+    assert.deepEqual(await names('t1', '52998224725'), ['João da Silva']);
+    assert.deepEqual(await names('t1', '99999-1234'), ['João da Silva']);
+    assert.deepEqual(await names('t1', 'MARIA exemplo'), ['Maria Souza']);
+    assert.deepEqual(await names('t1', 'volta redonda'), ['João da Silva']);
+    assert.deepEqual(await names('t1', 'joao maria'), []);
+    // "%" e "_" são texto, não curinga.
+    assert.deepEqual(await names('t1', '%'), []);
+    assert.deepEqual(await names('t1', '_'), []);
+    // Sem termo: todos da conta, em ordem.
+    assert.deepEqual(await names('t1', ''), ['João da Silva', 'Maria Souza']);
+    // Edição atualiza o texto de busca.
+    const maria = (await searchCustomers(db, 't1', owner, { q: 'maria' })).items[0];
+    await updateCustomer(db, 't1', maria.id, { name: 'Maria Aparecida' }, owner);
+    assert.deepEqual(await names('t1', 'aparecida'), ['Maria Aparecida']);
+    // Permissão: sem CUSTOMER_VIEW não busca.
+    const stock = { userId: 'e-1', displayName: 'Estoque', role: 'operator', storeId: null, permissions: permissionsForRole('ESTOQUISTA') };
+    await assert.rejects(() => searchCustomers(db, 't1', stock, { q: 'joao' }), /permissão/);
+});
+
+test('busca de clientes: páginas para contas grandes e clientes antigos sem o texto de busca', async () => {
+    const db = createFakeD1();
+    await db.prepare("INSERT INTO accounts (id,name,state,revision,subscription_status,access_until,max_stores,created_at) VALUES ('t1','t1','{}',0,'trial',9999999999999,3,0)").bind().run();
+    for (let i = 0; i < 45; i++) await createCustomer(db, 't1', { name: `Cliente ${String(i).padStart(2, '0')}`, document: String(20000000000 + i) }, owner);
+    const p1 = await searchCustomers(db, 't1', owner, { q: 'cliente', limit: 20 });
+    const p3 = await searchCustomers(db, 't1', owner, { q: 'cliente', limit: 20, offset: 40 });
+    assert.equal(p1.items.length, 20);
+    assert.equal(p1.hasMore, true);
+    assert.equal(p3.items.length, 5);
+    assert.equal(p3.hasMore, false);
+    // Cliente gravado antes da coluna de busca existir (texto vazio): é preenchido na primeira busca.
+    await db.prepare("INSERT INTO customers (id, tenant_id, name, document, created_at, updated_at) VALUES ('antigo', 't1', 'Zuleide Antiga', '33322211100', 0, 0)").bind().run();
+    assert.deepEqual((await searchCustomers(db, 't1', owner, { q: 'zuleide' })).items.map((c) => c.id), ['antigo']);
+    assert.deepEqual((await searchCustomers(db, 't1', owner, { q: '33322211100' })).items.map((c) => c.id), ['antigo']);
 });
