@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
 import { guardedLogin } from '@/lib/auth/service';
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
         return res;
     } catch (error) {
         if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-        if (error instanceof RuleError) {
+        if ((error = toRuleError(error) ?? error) instanceof RuleError) {
             // 401 = credencial errada, 429 = bloqueio por excesso de tentativas: sinais de ataque/erro de uso.
             if (error.status === 401 || error.status === 429) logger.warn(error.status === 429 ? 'auth.login.bloqueado' : 'auth.login.falhou', { requestId, emailRef, ip: clientIp(request.headers) });
             return reply({ error: error.message }, error.status);

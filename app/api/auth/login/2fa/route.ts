@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
 import { isSameOrigin, sessionCookieHeader } from '@/app/auth';
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
         return res;
     } catch (error) {
         if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-        if (error instanceof RuleError) {
+        if ((error = toRuleError(error) ?? error) instanceof RuleError) {
             logger.warn('auth.login.2fa_falhou', { requestId, status: error.status, ip: clientIp(request.headers) });
             return reply({ error: error.message }, error.status);
         }

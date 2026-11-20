@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
@@ -36,7 +37,7 @@ async function handle(request:Request,context:{params:Promise<{id:string}>},muta
   else throw new RuleError('Ação inválida.',400);
   return reply(await billingView(db,tenantId,id,actor));
  }catch(error){
-  if(error instanceof RuleError)return reply({error:error.message},error.status);
+  if((error = toRuleError(error) ?? error) instanceof RuleError)return reply({error:error.message},error.status);
   if(error instanceof BodyTooLargeError)return reply({error:'Requisição muito grande.'},413);
   if(error instanceof SyntaxError)return reply({error:'Dados inválidos.'},400);
   logger.error('billing.erro',{error});return reply({error:'Não foi possível concluir. Consulte a situação antes de repetir.'},500);

@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
 import { readTextLimited, readJsonLimited, BodyTooLargeError } from '@/lib/http/body';
@@ -29,7 +30,7 @@ export async function POST(request: Request) {
         return res;
     } catch (error) {
         if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-        if (error instanceof RuleError) {
+        if ((error = toRuleError(error) ?? error) instanceof RuleError) {
             if (error.status === 429 || error.status === 403) logger.warn('auth.cadastro.recusado', { requestId, status: error.status, ip: clientIp(request.headers) });
             return reply({ error: error.message }, error.status);
         }

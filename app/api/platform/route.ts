@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { getCurrentUser, isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
@@ -17,7 +18,7 @@ export async function GET() {
   if (!user) return reply({ error: 'Entre na sua conta.', signIn: true }, 401);
   return reply(await getPlatformOverview(database(), user.email));
  } catch (error) {
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('plataforma.consulta.erro', { requestId, error });
   return reply({ error: 'Não foi possível carregar o painel.', requestId }, 500);
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
   return reply(await getPlatformOverview(db, user.email));
  } catch (error) {
   if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('plataforma.acao.erro', { requestId, error });
   return reply({ error: 'Não foi possível concluir. Tente novamente.', requestId }, 500);

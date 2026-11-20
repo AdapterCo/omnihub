@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
 import { getCurrentUser, isSameOrigin } from '@/app/auth';
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
         return reply({ error: 'Ação inválida.' }, 400);
     } catch (error) {
         if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-        if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+        if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
         logger.error('auth.2fa.erro', { requestId, error });
         return reply({ error: 'Não foi possível concluir. Tente novamente.', requestId }, 503);
     }

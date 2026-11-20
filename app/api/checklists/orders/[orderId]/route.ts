@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, requireActive } from '@/lib/domain';
@@ -14,7 +15,7 @@ const ID = /^[A-Za-z0-9-]{1,80}$/;
 
 function failure(error: unknown, event: string, message: string) {
  if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
- if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+ if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
  const requestId = crypto.randomUUID();
  logger.error(event, { requestId, error });
  return reply({ error: message, requestId }, 500);

@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
   }
   return reply({ ...(await getSubscriptionPage(database(), session.tenantId)), access: session.plan });
  } catch (error) {
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('assinatura.consulta.erro', { requestId, error });
   return reply({ error: 'Não foi possível consultar a assinatura.', requestId }, 500);
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
   return reply({ error: 'Ação inválida.' }, 400);
  } catch (error) {
   if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('assinatura.acao.erro', { requestId, error });
   return reply({ error: 'Não foi possível concluir. Tente novamente.', requestId }, 500);

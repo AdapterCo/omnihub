@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, requireActive } from '@/lib/domain';
@@ -21,7 +22,7 @@ export async function GET(request: Request) {
   const templates = await listChecklistTemplates(database(), session.tenantId, storeId, session.actor);
   return reply({ templates, fields: CONTRACT_FIELDS });
  } catch (error) {
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('checklists.modelos.erro', { requestId, error });
   return reply({ error: 'Não foi possível carregar o checklist da loja.', requestId }, 500);
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
   return reply({ ok: true });
  } catch (error) {
   if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('checklists.salvar.erro', { requestId, error });
   return reply({ error: 'Não foi possível salvar. Tente novamente.', requestId }, 500);

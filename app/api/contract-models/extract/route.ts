@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { RuleError, requireActive } from '@/lib/domain';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   const result = await extractContractText(bytes);
   return reply({ ...result, sourceFilename: file.name.slice(0, 200) });
  } catch (error) {
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('contract-models.importar.erro', { requestId, error });
   return reply({ error: 'Não foi possível ler o PDF. Tente novamente.', requestId }, 500);

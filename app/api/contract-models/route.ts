@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, requireActive } from '@/lib/domain';
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
   const models = await listContractModels(database(), session.tenantId, storeId, session.actor);
   return reply({ models, fields: CONTRACT_FIELDS });
  } catch (error) {
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('contract-models.consulta.erro', { requestId, error });
   return reply({ error: 'Não foi possível carregar os modelos de contrato.', requestId }, 500);
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
   return reply({ error: 'Ação inválida.' }, 400);
  } catch (error) {
   if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('contract-models.acao.erro', { requestId, error });
   return reply({ error: 'Não foi possível concluir. Tente novamente.', requestId }, 500);

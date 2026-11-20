@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { database } from '@/db/database';
 import { RuleError } from '@/lib/domain';
 import { resolveWorkspaceSession } from '@/lib/http/workspaceSession';
@@ -27,7 +28,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
    },
   });
  } catch (error) {
-  if (error instanceof RuleError) return Response.json({ error: error.message }, { status: error.status });
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return Response.json({ error: error.message }, { status: error.status });
   const requestId = crypto.randomUUID();
   logger.error('documents.download.erro', { requestId, error });
   return Response.json({ error: 'Não foi possível abrir o documento.', requestId }, { status: 500 });

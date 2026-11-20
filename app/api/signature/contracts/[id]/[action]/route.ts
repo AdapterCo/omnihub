@@ -1,3 +1,4 @@
+import { toRuleError } from '@/lib/errors';
 import { isSameOrigin } from '@/app/auth';
 import { database } from '@/db/database';
 import { RuleError, requireActive } from '@/lib/domain';
@@ -49,7 +50,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return reply({ error: 'Ação inválida.' }, 404);
  } catch (error) {
   if (error instanceof BodyTooLargeError) return reply({ error: error.message }, 413);
-  if (error instanceof RuleError) return reply({ error: error.message }, error.status);
+  if ((error = toRuleError(error) ?? error) instanceof RuleError) return reply({ error: error.message }, error.status);
   const requestId = crypto.randomUUID();
   logger.error('signature.acao.erro', { requestId, error });
   return reply({ error: 'Não foi possível concluir a operação de assinatura. Tente novamente.', requestId }, 500);
